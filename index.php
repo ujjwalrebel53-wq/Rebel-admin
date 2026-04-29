@@ -146,6 +146,11 @@ Glad to have you here 🎉','media'=>'','buttons'=>[]];
     if(!isset($d['settings']['api_keys']))$d['settings']['api_keys']=[];
     if(!isset($d['settings']['bot_vars']))$d['settings']['bot_vars']='';
     if(!isset($d['dyn_vars']))$d['dyn_vars']=[];
+
+    $defLinkAuto=['enabled'=>false,'rules'=>[]];
+    if(!isset($d['settings']['link_automation']))$d['settings']['link_automation']=$defLinkAuto;
+    else{foreach($defLinkAuto as $mk=>$mv){if(!array_key_exists($mk,$d['settings']['link_automation']))$d['settings']['link_automation'][$mk]=$mv;}}
+
     return $d;
 }
 function saveDB($id,$d){file_put_contents(getBotDir($id).'data.json',json_encode($d,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
@@ -1301,6 +1306,62 @@ function handleFreeText($botId,$chatId,$isGroup,$uid,$u,&$db,$s,$msgText,$token,
     }
     if($fired)return true;
 
+    return false;
+}
+
+function execLinkAutomation($botId,$chatId,$u,&$db,$s,$msgText,$token){
+    $laCfg=$s['link_automation']??['enabled'=>false,'rules'=>[]];
+    if(empty($laCfg['enabled']))return false;
+    $rules=$laCfg['rules']??[];
+    $msgLower=strtolower(trim($msgText));
+    foreach($rules as $rule){
+        if(empty($rule['enabled']))continue;
+        $trigger=strtolower(trim($rule['trigger']??''));
+        if($trigger===''||$trigger!==$msgLower)continue;
+        if(!empty($rule['access_control'])&&!hasAccess($u['id']??'',$chatId,$rule['access_control'],$s['global_vars']??''))continue;
+        $ruleUrl=trim($rule['url']??'');
+        if(empty($ruleUrl))continue;
+        // Replace {query}, {tg_name}, {tg_id}, {tg_username} in URL and body
+        $varMap=buildVarMap($u,$s,$msgText);
+        foreach($varMap as $vk=>$vv)$ruleUrl=str_replace('{'.$vk.'}',$vv,$ruleUrl);
+        $ruleHeaders=$rule['headers']??'';
+        foreach($varMap as $vk=>$vv)$ruleHeaders=str_replace('{'.$vk.'}',$vv,$ruleHeaders);
+        $ruleBody=$rule['body']??'';
+        foreach($varMap as $vk=>$vv)$ruleBody=str_replace('{'.$vk.'}',$vv,$ruleBody);
+        $timeout=max(5,min(120,(int)($rule['timeout']??30)));
+        $result=doCurl($ruleUrl,$rule['method']??'GET',$ruleHeaders,$ruleBody,$timeout);
+        $rawBody=$result['body']??'';
+        $respData=json_decode($rawBody,true);
+        $extracted=null;
+        $respPath=trim($rule['response_path']??'');
+        if($respPath!==''&&$respData!==null){$extracted=jsonPath($respData,$respPath);}
+        if($extracted===null&&$respData!==null){
+            foreach(['result','response','text','content','answer','message','output','data'] as $fk){
+                if(isset($respData[$fk])&&is_string($respData[$fk])&&trim($respData[$fk])!==''){$extracted=$respData[$fk];break;}
+            }
+        }
+        if($extracted===null)$extracted=$rawBody;
+        $failed=($result['code']>=400||($extracted===null||$extracted===''));
+        if($failed){
+            $errMsg=pv($rule['error_message']??'⚠️ Error fetching link response.',$u,$s,$msgText,'');
+            tg('sendMessage',['chat_id'=>$chatId,'text'=>$errMsg,'parse_mode'=>'HTML'],$token);
+            addLog($botId,"LinkAuto Fail [{$rule['id']}] HTTP {$result['code']}",'error');
+        }else{
+            $rawHtml=htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8');
+            $tmpl=$rule['reply_template']??'{response}';
+            $tmpl=str_replace(['{response}','{result}','{curl_response}'],[$rawHtml,$rawHtml,$rawHtml],$tmpl);
+            if($respPath!==''){ $tmpl=str_replace('{'.$respPath.'}',$rawHtml,$tmpl); }
+            if(is_array($respData)){
+                $jmap=flattenJson($respData);
+                uksort($jmap,function($a,$b){return strlen($b)-strlen($a);});
+                foreach($jmap as $jk=>$jv)$tmpl=str_replace('{'.$jk.'}',htmlspecialchars((string)$jv,ENT_NOQUOTES,'UTF-8'),$tmpl);
+            }
+            $tmpl=pvNoStamp($tmpl,$u,$s,$msgText,'',$db);
+            tg('sendMessage',['chat_id'=>$chatId,'text'=>$tmpl,'parse_mode'=>'HTML'],$token);
+            addLog($botId,"LinkAuto OK [{$rule['id']}]: ".mb_substr($msgText,0,40).' by '.($u['name']??''),'success');
+        }
+        return true;
+    }
     return false;
 }
 
@@ -3198,6 +3259,7 @@ if(isset($_GET['webhook_bot'])){
             }
         }
 
+        if(execLinkAutomation($botId,$chatId,$u,$db,$s,$msgText,$token)){http_response_code(200);exit;}
         handleFreeText($botId,$chatId,$isGroup,$uid,$u,$db,$s,$msgText,$token,$botUsername);
     }
     http_response_code(200);exit;
@@ -3832,6 +3894,57 @@ if($page==='api'){
             }
             addLog($actId,"Promo Broadcast: $sent sent, $fail failed",'info');
             jout(['ok'=>true,'sent'=>$sent,'failed'=>$fail]);break;
+        case 'get_link_automation':
+            $la=$db['settings']['link_automation']??['enabled'=>false,'rules'=>[]];
+            jout(['ok'=>true,'data'=>$la]);break;
+        case 'save_link_automation':
+            $laIn=$body['link_automation']??[];
+            $laRules=[];
+            foreach($laIn['rules']??[] as $rule){
+                $ruleUrl=trim($rule['url']??'');
+                if(empty($ruleUrl))continue;
+                $laRules[]=[
+                    'id'=>!empty($rule['id'])?$rule['id']:uniqid('la_'),
+                    'label'=>trim($rule['label']??$ruleUrl),
+                    'url'=>$ruleUrl,
+                    'method'=>in_array(strtoupper($rule['method']??'GET'),['GET','POST','PUT','DELETE'])?strtoupper($rule['method']):'GET',
+                    'headers'=>trim($rule['headers']??''),
+                    'body'=>trim($rule['body']??''),
+                    'response_path'=>trim($rule['response_path']??''),
+                    'trigger'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',trim($rule['trigger']??''))),
+                    'reply_template'=>trim($rule['reply_template']??'{response}'),
+                    'error_message'=>trim($rule['error_message']??'⚠️ Error fetching link response.'),
+                    'enabled'=>(bool)($rule['enabled']??true),
+                    'access_control'=>trim($rule['access_control']??''),
+                    'timeout'=>max(5,min(120,(int)($rule['timeout']??30))),
+                ];
+            }
+            $db['settings']['link_automation']=['enabled'=>(bool)($laIn['enabled']??false),'rules'=>$laRules];
+            saveDB($actId,$db);
+            addLog($actId,'Link Automation settings saved ('.(count($laRules)).' rules)','info');
+            jout(['ok'=>true,'count'=>count($laRules)]);break;
+        case 'test_link_automation':
+            if(!$actId)jout(['ok'=>false,'error'=>'No bot selected']);
+            $testUrl=trim($body['url']??'');
+            $testMethod=strtoupper($body['method']??'GET');
+            $testHeaders=trim($body['headers']??'');
+            $testBody=trim($body['body']??'');
+            $testPath=trim($body['response_path']??'');
+            $testTimeout=max(5,min(120,(int)($body['timeout']??30)));
+            if(empty($testUrl))jout(['ok'=>false,'error'=>'URL required']);
+            $testResult=doCurl($testUrl,$testMethod,$testHeaders,$testBody,$testTimeout);
+            $rawResp=$testResult['body']??'';
+            $respData=json_decode($rawResp,true);
+            $extracted=null;
+            if($testPath!==''&&$respData!==null){$extracted=jsonPath($respData,$testPath);}
+            if($extracted===null&&$respData!==null){
+                foreach(['result','response','text','content','answer','message','output','data'] as $fk){
+                    if(isset($respData[$fk])&&is_string($respData[$fk])&&trim($respData[$fk])!==''){$extracted=$respData[$fk];break;}
+                }
+            }
+            if($extracted===null)$extracted=$rawResp;
+            jout(['ok'=>true,'http_code'=>$testResult['code'],'raw_body'=>mb_substr($rawResp,0,2000),'extracted'=>mb_substr((string)$extracted,0,1000),'error'=>$testResult['error']??'']);break;
+
         default:jout(['ok'=>false,'error'=>'Unknown action']);
     }
 }
@@ -4012,6 +4125,7 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="ni" onclick="nav('rosebot',this)" style="color:#ff6b9d;border-left:2px solid #ff6b9d">🔥 The Rebel Bot</button>
     <button class="ni" onclick="nav('hiddeneye',this)" style="color:#39ff14;border-left:2px solid #39ff14">👁 Hidden Eye Bot</button>
         <button class="ni" onclick="nav('promobot',this)" style="color:#ff9f0a;border-left:2px solid #ff9f0a">📢 Promo Bot</button>
+    <button class="ni" onclick="nav('linkautomation',this)" style="color:#00f5ff;border-left:2px solid #00f5ff">🔗 Link Automation</button>
     <a href="?page=logout" class="ni" style="color:var(--r)">🚪 Logout</a>
   </nav>
 </aside>
@@ -5866,6 +5980,59 @@ td{padding:9px 11px;vertical-align:middle;}
       <div id="promo-save-result" style="display:none"></div>
     </div>
   </div>
+
+  <!-- LINK AUTOMATION SECTION -->
+  <div class="panel" id="p-linkautomation">
+    <div class="card" style="border-color:rgba(0,245,255,.5);background:linear-gradient(135deg,rgba(0,245,255,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:36px;height:36px;background:rgba(0,245,255,.15);border:2px solid rgba(0,245,255,.6);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px">&#128279;</div>
+          <div>
+            <div class="st" style="color:var(--c);font-size:13px">LINK AUTOMATION</div>
+            <div style="font-size:10px;color:var(--td);margin-top:1px">Kisi bhi URL ko trigger se automate karo — response bot me reflect hoga</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="la-status-label" style="font-family:'Share Tech Mono';font-size:11px;color:var(--td)">OFF</span>
+          <button id="la-toggle-btn" class="btn bsm bg" onclick="laToggle()" style="min-width:72px">Enable</button>
+        </div>
+      </div>
+      <p style="font-size:12px;color:var(--td);margin-bottom:0">Jab user koi specific keyword bheje, bot us linked URL ko fetch karega aur response wapas bhejega. GET/POST/curl sab support hai.</p>
+    </div>
+
+    <div class="card" style="border-color:rgba(57,255,20,.35)">
+      <div class="sh">
+        <div class="st" style="color:var(--g)">&#128279; AUTOMATION RULES</div>
+        <button class="btn bsu bsm" onclick="laAddRule()">+ Add Rule</button>
+      </div>
+      <p style="font-size:12px;color:var(--td);margin-bottom:12px">Har rule ek trigger keyword + URL define karta hai. User woh keyword bheje to bot URL fetch karke response reply karega.</p>
+
+      <div style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:10px;margin-bottom:12px;font-family:'Share Tech Mono';font-size:10px;color:var(--td);line-height:2">
+        <span style="color:var(--c)">Available reply template vars:</span>
+        <code style="color:var(--y)">{response}</code> = fetched response &nbsp;
+        <code style="color:var(--y)">{tg_name}</code> = user name &nbsp;
+        <code style="color:var(--y)">{tg_id}</code> = user ID &nbsp;
+        <code style="color:var(--y)">{tg_username}</code> = @username &nbsp;
+        <code style="color:var(--y)">{query}</code> = trigger text &nbsp;
+        <code style="color:var(--y)">{field_name}</code> = any JSON field from response
+      </div>
+
+      <div id="la-rules-list" style="display:flex;flex-direction:column;gap:14px">
+        <div style="text-align:center;color:var(--td);font-size:12px;padding:20px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">
+          Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="border-color:rgba(0,245,255,.3)">
+      <div class="sh"><div class="st" style="color:var(--c)">&#9989; SAVE SETTINGS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsu" onclick="laSave()" style="flex:1;min-width:150px;padding:11px">&#128190; Save All Rules</button>
+      </div>
+      <div id="la-save-result" style="margin-top:10px;display:none"></div>
+    </div>
+  </div>
+
 <?php endif ?>
 
 <script>
@@ -5879,7 +6046,7 @@ function nav(id,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
-  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad};
+  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad};
   if(m[id])m[id]();
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
@@ -8253,6 +8420,193 @@ async function promoSendNow(){
   } else {
     toast('Failed: '+(r.error||''), 'error');
     if(res) res.innerHTML = '<div style="color:var(--r);font-family:\'Share Tech Mono\';font-size:12px">' + (r.error||'Unknown error') + '</div>';
+  }
+}
+
+// ─── LINK AUTOMATION ────────────────────────────────────────────────────────
+let _laData = {enabled:false, rules:[]};
+
+async function laLoad(){
+  const r = await api('get_link_automation');
+  if(!r.ok) return;
+  _laData = r.data || _laData;
+  laRenderUI();
+}
+
+function laRenderUI(){
+  const lbl = g('la-status-label');
+  const btn = g('la-toggle-btn');
+  if(lbl){ lbl.textContent = _laData.enabled ? 'ON' : 'OFF'; lbl.style.color = _laData.enabled ? 'var(--g)' : 'var(--td)'; }
+  if(btn){ btn.textContent = _laData.enabled ? 'Disable' : 'Enable'; btn.className = 'btn bsm ' + (_laData.enabled ? 'bd' : 'bg'); }
+  laRenderRules();
+}
+
+function laToggle(){
+  _laData.enabled = !_laData.enabled;
+  laRenderUI();
+  laSave(true);
+}
+
+function laAddRule(){
+  if(!_laData.rules) _laData.rules = [];
+  _laData.rules.push({
+    id: 'la_' + Date.now(),
+    label: 'New Rule',
+    url: '',
+    method: 'GET',
+    headers: '',
+    body: '',
+    response_path: '',
+    trigger: '',
+    reply_template: '🔗 Response:\n{response}',
+    error_message: '⚠️ Error fetching response.',
+    enabled: true,
+    access_control: '',
+    timeout: 30,
+  });
+  laRenderRules();
+}
+
+function laDeleteRule(idx){
+  if(!confirm('Yeh rule delete karo?')) return;
+  _laData.rules.splice(idx, 1);
+  laRenderRules();
+}
+
+function laUpdateRule(idx, field, value){
+  if(_laData.rules[idx]) _laData.rules[idx][field] = value;
+}
+
+function laRenderRules(){
+  const container = g('la-rules-list');
+  if(!container) return;
+  const rules = _laData.rules || [];
+  if(!rules.length){
+    container.innerHTML = '<div style="text-align:center;color:var(--td);font-size:12px;padding:20px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  rules.forEach((rule, idx) => {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--s2);border:1px solid rgba(0,245,255,.25);border-radius:10px;padding:14px;position:relative';
+    const safe = v => (v||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<span style="font-family:\'Share Tech Mono\';font-size:11px;color:var(--c);font-weight:700">&#128279; RULE ' + (idx+1) + '</span>' +
+          '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:var(--td)">' +
+            '<input type="checkbox" ' + (rule.enabled?'checked':'') + ' onchange="laUpdateRule('+idx+',\'enabled\',this.checked)" style="accent-color:var(--g);width:13px;height:13px"> Enabled' +
+          '</label>' +
+        '</div>' +
+        '<button class="btn bd bsm" onclick="laDeleteRule(' + idx + ')" style="padding:3px 8px;font-size:11px">&#128465; Delete</button>' +
+      '</div>' +
+      '<div class="fg mb">' +
+        '<div class="fgrp">' +
+          '<label class="fl">Label (sirf apne liye)</label>' +
+          '<input type="text" class="fi" value="' + safe(rule.label) + '" placeholder="My API Rule" oninput="laUpdateRule('+idx+',\'label\',this.value)">' +
+        '</div>' +
+        '<div class="fgrp">' +
+          '<label class="fl">Trigger Keyword (user yahi bheje)</label>' +
+          '<input type="text" class="fi" value="' + safe(rule.trigger) + '" placeholder="price, weather, status..." oninput="laUpdateRule('+idx+',\'trigger\',this.value)" style="color:var(--y)">' +
+        '</div>' +
+      '</div>' +
+      '<div style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:11px;margin-bottom:10px">' +
+        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--c);margin-bottom:8px">&#127758; URL CONFIG</div>' +
+        '<div class="fg mb">' +
+          '<div class="fgrp">' +
+            '<label class="fl">URL <span style="color:var(--td);font-size:9px">({query},{tg_name},{tg_id} vars supported)</span></label>' +
+            '<input type="text" class="fi" value="' + safe(rule.url) + '" placeholder="https://api.example.com/data?q={query}" oninput="laUpdateRule('+idx+',\'url\',this.value)">' +
+          '</div>' +
+          '<div class="fgrp">' +
+            '<label class="fl">Method</label>' +
+            '<select class="fsel" onchange="laUpdateRule('+idx+',\'method\',this.value)">' +
+              ['GET','POST','PUT','DELETE'].map(m=>'<option value="'+m+'"'+(rule.method===m?' selected':'')+'>'+m+'</option>').join('') +
+            '</select>' +
+          '</div>' +
+          '<div class="fgrp">' +
+            '<label class="fl">Timeout (s)</label>' +
+            '<input type="number" class="fi" value="' + (rule.timeout||30) + '" min="5" max="120" oninput="laUpdateRule('+idx+',\'timeout\',parseInt(this.value)||30)">' +
+          '</div>' +
+        '</div>' +
+        '<div class="fgrp mb">' +
+          '<label class="fl">Headers (Key: Value per line)</label>' +
+          '<textarea class="fta" style="min-height:50px;font-size:11px" placeholder="Authorization: Bearer {MY_KEY}&#10;Content-Type: application/json" oninput="laUpdateRule('+idx+',\'headers\',this.value)">' + safe(rule.headers) + '</textarea>' +
+        '</div>' +
+        '<div class="fgrp mb">' +
+          '<label class="fl">Body (for POST/PUT) — {query}, {tg_name} vars</label>' +
+          '<textarea class="fta" style="min-height:45px;font-size:11px" placeholder=\'{"q":"{query}"}\' oninput="laUpdateRule('+idx+',\'body\',this.value)">' + safe(rule.body) + '</textarea>' +
+        '</div>' +
+        '<div class="fgrp mb">' +
+          '<label class="fl">Response Path (e.g. data.result — blank=auto detect)</label>' +
+          '<input type="text" class="fi" value="' + safe(rule.response_path) + '" placeholder="data.price or choices.0.message.content" oninput="laUpdateRule('+idx+',\'response_path\',this.value)">' +
+        '</div>' +
+        '<button class="btn bg bsm" onclick="laTestRule('+idx+')" style="font-size:11px">&#9889; Test URL Now</button>' +
+        '<div id="la-test-result-'+idx+'" style="margin-top:8px;display:none"></div>' +
+      '</div>' +
+      '<div style="background:rgba(57,255,20,.04);border:1px solid rgba(57,255,20,.2);border-radius:8px;padding:11px;margin-bottom:10px">' +
+        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--g);margin-bottom:8px">&#128172; REPLY TEMPLATE</div>' +
+        '<div class="fgrp mb">' +
+          '<label class="fl">Reply Template — {response} = fetched data, {field} = JSON field</label>' +
+          '<textarea class="fta" style="min-height:70px" placeholder="&#128279; Result:\n{response}" oninput="laUpdateRule('+idx+',\'reply_template\',this.value)">' + safe(rule.reply_template) + '</textarea>' +
+        '</div>' +
+        '<div class="fgrp">' +
+          '<label class="fl">Error Message (fetch fail hone par)</label>' +
+          '<input type="text" class="fi" value="' + safe(rule.error_message) + '" placeholder="&#9888;&#65039; Error!" oninput="laUpdateRule('+idx+',\'error_message\',this.value)">' +
+        '</div>' +
+      '</div>' +
+      '<div class="fgrp">' +
+        '<label class="fl">&#128274; Access Control (blank=sab, ya Telegram IDs comma se)</label>' +
+        '<input type="text" class="fi" value="' + safe(rule.access_control) + '" placeholder="{ADMINS} or 123456,789" oninput="laUpdateRule('+idx+',\'access_control\',this.value)">' +
+      '</div>';
+    container.appendChild(card);
+  });
+}
+
+async function laTestRule(idx){
+  const rule = _laData.rules[idx];
+  if(!rule) return;
+  const res = g('la-test-result-'+idx);
+  if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--y);font-family:\'Share Tech Mono\';font-size:11px">Testing...</div>'; }
+  const r = await api('test_link_automation', {
+    url: rule.url,
+    method: rule.method||'GET',
+    headers: rule.headers||'',
+    body: rule.body||'',
+    response_path: rule.response_path||'',
+    timeout: rule.timeout||30,
+  });
+  if(!res) return;
+  res.style.display='block';
+  if(r.ok){
+    const codeBadge = r.http_code < 400
+      ? '<span style="background:rgba(57,255,20,.2);color:var(--g);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">HTTP '+r.http_code+'</span>'
+      : '<span style="background:rgba(255,45,85,.2);color:var(--r);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">HTTP '+r.http_code+'</span>';
+    const escExtracted = (r.extracted||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const escRaw = (r.raw_body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    res.innerHTML =
+      '<div style="background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px;font-size:11px">' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">' + codeBadge + '<span style="color:var(--g);font-family:\'Share Tech Mono\';font-size:10px">&#9989; Response received</span></div>' +
+        '<div style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--y);margin-bottom:4px">Extracted Value:</div>' +
+        '<div style="background:var(--s2);border:1px solid var(--b);border-radius:5px;padding:7px;color:var(--g);font-family:\'Share Tech Mono\';font-size:11px;white-space:pre-wrap;max-height:120px;overflow-y:auto">' + escExtracted + '</div>' +
+        '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--td);cursor:pointer;font-family:\'Share Tech Mono\'">Raw Response (click to expand)</summary><div style="background:var(--s2);border-radius:5px;padding:7px;color:var(--td);font-family:\'Share Tech Mono\';font-size:10px;white-space:pre-wrap;max-height:150px;overflow-y:auto;margin-top:5px">' + escRaw + '</div></details>' +
+      '</div>';
+  } else {
+    res.innerHTML = '<div style="background:rgba(255,45,85,.08);border:1px solid rgba(255,45,85,.3);border-radius:8px;padding:10px;color:var(--r);font-family:\'Share Tech Mono\';font-size:11px">&#10060; ' + (r.error||'Unknown error') + '</div>';
+  }
+}
+
+async function laSave(silent=false){
+  const d = {enabled: _laData.enabled, rules: _laData.rules || []};
+  const r = await api('save_link_automation', {link_automation: d});
+  const res = g('la-save-result');
+  if(r.ok){
+    _laData = {..._laData, ...d};
+    if(!silent){ toast('Link Automation settings save ho gayi!', 'success'); }
+    if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--g);font-family:\'Share Tech Mono\';font-size:12px">&#9989; Saved! '+r.count+' rule(s) active.</div>'; }
+    laRenderUI();
+  } else {
+    toast('Save failed: '+(r.error||''), 'error');
+    if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--r);font-family:\'Share Tech Mono\';font-size:12px">&#10060; '+(r.error||'Unknown error')+'</div>'; }
   }
 }
 </script></body></html>
