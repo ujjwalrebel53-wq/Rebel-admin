@@ -1624,61 +1624,132 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
         foreach($sess['vars']??[] as $k=>$v)if(!isset($vars[$k]))$vars[$k]=$v;
     }
 
-    // UIDAI Retrieve Enrollment Number steps
-    // URL: https://resident.uidai.gov.in/retrieve-eid-uid
+    // UIDAI — Retrieve EID/UID by Mobile Number
     $steps=[
         ['type'=>'open','value'=>'https://resident.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
         ['type'=>'wait_load','value'=>'networkidle','timeout'=>'25'],
-        // Click "Mobile" radio to search by mobile number (default should be there)
+        // Select "Mobile" tab/radio
         ['type'=>'wait_element','selector'=>'input[type="radio"][value="M"], #mobileRadio, label[for*="mobile"], input[name*="searchBy"]','timeout'=>'15','stop_on_error'=>false],
-        ['type'=>'js_eval','value'=>'(()=>{var r=document.querySelector(\'input[type="radio"][value="M"],input[type="radio"][id*="mobile"],input[name*="searchBy"][value="M"]\');if(r){r.click();return "clicked";}return "not found";})()','var_name'=>'radio_clicked'],
-        // Fill Full Name
-        ['type'=>'wait_element','selector'=>'input[formcontrolname="fullName"], input[placeholder*="Full Name"], input[placeholder*="full name"], #fullName, input[name*="fullName"]','timeout'=>'15','stop_on_error'=>true],
-        ['type'=>'fill','selector'=>'input[formcontrolname="fullName"], input[placeholder*="Full Name"], input[placeholder*="full name"], #fullName, input[name*="fullName"]','value'=>'{full_name}'],
-        // Fill Mobile Number
-        ['type'=>'fill','selector'=>'input[formcontrolname="mobileNo"], input[formcontrolname="mobile"], input[placeholder*="Mobile"], input[placeholder*="mobile"], #mobileNo, input[name*="mobile"]','value'=>'{mobile}'],
-        // Take screenshot of form to verify
-        ['type'=>'screenshot','caption'=>'Form filled — checking captcha','send_ss'=>false,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
-        // Ask captcha
-        ['type'=>'ask_captcha','caption'=>'🔐 <b>UIDAI Captcha</b> — screenshot mein jo code dikh raha hai woh reply karo:','crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>'','var_name'=>'captcha'],
-        // Fill captcha
-        ['type'=>'fill','selector'=>'input[formcontrolname="captchaText"], input[placeholder*="aptcha"], input[placeholder*="security"], input[name*="captcha"], #captchaText','value'=>'{captcha}'],
-        // Click Send OTP
-        ['type'=>'click','selector'=>'button[type="submit"], .send-otp-btn, button:contains("Send OTP"), .btn-send-otp, .submit-btn','stop_on_error'=>false],
+        ['type'=>'js_eval','value'=>'(()=>{var r=document.querySelector(\'input[type="radio"][value="M"],input[type="radio"][id*="mobile"],input[name*="searchBy"][value="M"]\');if(r){r.click();return "clicked";}return "not_found";})()','var_name'=>'radio_clicked'],
+        // Wait for Full Name field
+        ['type'=>'wait_element','selector'=>'input[formcontrolname="fullName"],input[placeholder*="Full Name"],input[placeholder*="full name"],#fullName,input[name*="fullName"]','timeout'=>'15','stop_on_error'=>true],
+        ['type'=>'fill','selector'=>'input[formcontrolname="fullName"],input[placeholder*="Full Name"],input[placeholder*="full name"],#fullName,input[name*="fullName"]','value'=>'{full_name}'],
+        // Fill Mobile
+        ['type'=>'fill','selector'=>'input[formcontrolname="mobileNo"],input[formcontrolname="mobile"],input[placeholder*="Mobile"],input[placeholder*="mobile"],#mobileNo,input[name*="mobile"]','value'=>'{mobile}'],
+        // Screenshot of filled form (not sent to user, only for captcha crop below)
+        ['type'=>'screenshot','caption'=>'Form filled','send_ss'=>false,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
+        // Ask user to solve captcha — sends full-page screenshot
+        ['type'=>'ask_captcha','caption'=>'🔐 <b>UIDAI Captcha</b>\n\nNeeche screenshot mein jo code dikh raha hai woh <b>reply</b> karo:','crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>'','var_name'=>'captcha'],
+        // Fill captcha answer
+        ['type'=>'fill','selector'=>'input[formcontrolname="captchaText"],input[placeholder*="aptcha"],input[placeholder*="ecurity"],input[name*="captcha"],#captchaText','value'=>'{captcha}'],
+        // Submit
+        ['type'=>'click','selector'=>'button[type="submit"],.send-otp-btn,.btn-send-otp,.submit-btn','stop_on_error'=>false],
         ['type'=>'wait_load','value'=>'networkidle','timeout'=>'20'],
-        // Take result screenshot and send to user
-        ['type'=>'screenshot','caption'=>'UIDAI Response','send_ss'=>true,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
+        // Send result screenshot to user
+        ['type'=>'screenshot','caption'=>'📋 UIDAI Result','send_ss'=>true,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
         // Get result text
-        ['type'=>'get_text','selector'=>'.success-message, .error-message, .alert, .result-msg, mat-card p, .otp-sent-msg, .ng-star-inserted h3, h3, .info-box','var_name'=>'result'],
+        ['type'=>'get_text','selector'=>'.success-message,.error-message,.alert,.result-msg,mat-card p,.otp-sent-msg,.ng-star-inserted h3,h3,.info-box,p.text-center','var_name'=>'result'],
     ];
 
     $script=buildBrowserScript($steps,$vars,$sessFile,$resFile,$from);
     $scrFile=getBotDir($botId).'uidaifetch_sc_'.preg_replace('/\W/','_',$uid).'.py';
     file_put_contents($scrFile,$script);
 
-    // Send "working..." message
+    // Loading message
     if(empty($extraVars['__uidaifetch_resume'])){
-        tg('sendMessage',['chat_id'=>$chatId,'text'=>'⏳ <b>UIDAI pe search kar raha hun...</b>\n\n📱 Mobile: <code>'.$mobile.'</code>\n👤 Name: <code>'.htmlspecialchars($fullName,ENT_QUOTES,'UTF-8').'</code>','parse_mode'=>'HTML'],$token);
+        tg('sendMessage',['chat_id'=>$chatId,
+            'text'=>"⏳ <b>UIDAI pe search kar raha hun...</b>\n\n📱 <b>Mobile:</b> <code>{$mobile}</code>\n👤 <b>Name:</b> <code>".htmlspecialchars($fullName,ENT_QUOTES,'UTF-8')."</code>\n\n<i>Thoda wait karo, captcha aayega...</i>",
+            'parse_mode'=>'HTML'],$token);
     }
 
     runPythonScript($scrFile,180);
     @unlink($scrFile);
 
     $res=file_exists($resFile)?json_decode(file_get_contents($resFile),true):null;
+
+    // ── No result file at all = Python/browser didn't start ──────────────────
     if(!$res){
-        tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ <b>Browser error!</b>\nPlaywright/Python VPS pe install hai? Check karo Dashboard → Diagnostics.','parse_mode'=>'HTML'],$token);
-        addLog($botId,"UidaiFetch FAIL uid=$uid",'error');
+        $dfuncs=ini_get('disable_functions');
+        $pyBin=PYTHON_BIN;
+        $errLines=[];
+        $errLines[]="❌ <b>UIDAI Fetch Failed!</b>";
+        $errLines[]="";
+        $errLines[]="<b>Reason:</b> Browser script koi output nahi de raha.";
+        $errLines[]="";
+        $errLines[]="<b>Possible causes:</b>";
+        // Check if exec methods work
+        $anyExec=function_exists('exec')||function_exists('proc_open')||function_exists('shell_exec');
+        if(!$anyExec){
+            $errLines[]="• <code>exec()</code> disabled hai — PHP disable_functions: <code>{$dfuncs}</code>";
+        } else {
+            // Check python exists
+            $pyExists=file_exists($pyBin)||@shell_exec('which '.escapeshellarg($pyBin).' 2>/dev/null');
+            if(!$pyExists){
+                $errLines[]="• Python nahi mila: <code>{$pyBin}</code>";
+                $errLines[]="  Fix: <code>pip3 install playwright</code>";
+            } else {
+                // Check playwright
+                $pwOut=[];$pwRet=1;
+                if(function_exists('exec'))@exec($pyBin.' -c "from playwright.sync_api import sync_playwright" 2>&1',$pwOut,$pwRet);
+                if($pwRet!==0){
+                    $errLines[]="• Playwright install nahi hai";
+                    $errLines[]="  Fix: <code>pip3 install playwright && playwright install chromium</code>";
+                } else {
+                    // Check chromium downloaded
+                    $crOut=[];$crRet=1;
+                    if(function_exists('exec'))@exec($pyBin.' -m playwright install --dry-run chromium 2>&1',$crOut,$crRet);
+                    $errLines[]="• Playwright Chromium browser missing ya crash hua";
+                    $errLines[]="  Fix: <code>playwright install chromium</code>";
+                }
+            }
+        }
+        $errLines[]="";
+        $errLines[]="• UIDAI site temporarily down ho sakti hai";
+        $errLines[]="• VPS pe internet block ho sakti hai";
+        $errLines[]="";
+        $errLines[]="<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>";
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>implode("\n",$errLines),'parse_mode'=>'HTML'],$token);
+        addLog($botId,"UidaiFetch FAIL (no result) uid={$uid} mobile={$mobile}",'error');
         return;
     }
 
-    // Captcha needed — show image to user
+    // ── Python ran but browser step returned error ────────────────────────────
+    if(($res['status']??'')==='error'){
+        $errMsg=trim($res['error']??'Unknown error');
+        // Detect common error patterns and give user-friendly message
+        $friendly='';
+        if(str_contains($errMsg,'No browser found')||str_contains($errMsg,'playwright')||str_contains($errMsg,'chromium')){
+            $friendly="🔧 <b>Browser nahi mila!</b>\n\nVPS pe SSH se yeh commands chala:\n<code>pip3 install playwright\nplaywrighty install chromium</code>";
+        } elseif(str_contains($errMsg,'net::ERR')||str_contains($errMsg,'ERR_NAME_NOT_RESOLVED')||str_contains($errMsg,'ERR_CONNECTION')){
+            $friendly="🌐 <b>Network error!</b>\n\nVPS ka internet check karo.\nYa UIDAI site abhi down hai — thodi der baad try karo.";
+        } elseif(str_contains($errMsg,'Timeout')||str_contains($errMsg,'timeout')||str_contains($errMsg,'timed out')){
+            $friendly="⏱ <b>Timeout!</b>\n\nUIDAI site bahut slow hai ya down hai.\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>";
+        } elseif(str_contains($errMsg,'Not found')||str_contains($errMsg,'not found')||str_contains($errMsg,'waiting for selector')){
+            $friendly="🔍 <b>Page element nahi mila!</b>\n\nUIDAI ne page update kiya hoga — selector change ho gaya.\nAdmin ko batao.";
+        } elseif(str_contains($errMsg,'selenium missing')||str_contains($errMsg,'selenium')){
+            $friendly="🔧 <b>Selenium nahi mila!</b>\n\n<code>pip3 install selenium</code> chalao VPS pe.";
+        }
+        // Get the step where error happened
+        $failedStep='';
+        foreach($res['steps']??[] as $step){
+            if(($step['status']??'')==='error'){
+                $failedStep=' (Step: '.$step['type'].')';
+                break;
+            }
+        }
+        $errDisplay=$friendly?:("❌ <b>Browser Error</b>{$failedStep}\n\n<code>".htmlspecialchars(mb_substr($errMsg,0,400),ENT_QUOTES,'UTF-8')."</code>");
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>$errDisplay."\n\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>",'parse_mode'=>'HTML'],$token);
+        addLog($botId,"UidaiFetch ERROR uid={$uid}: ".mb_substr($errMsg,0,120),'error');
+        return;
+    }
+
+    // ── Captcha needed ────────────────────────────────────────────────────────
     if(($res['status']??'')==='captcha_needed'){
         $b64=$res['captcha_image']??'';
         $prompt=$res['captcha_prompt']??'🔐 <b>Captcha</b> — jo code dikh raha hai woh reply karo:';
         $sessData=['resume_from'=>$res['resume_from'],'vars'=>$res['vars']??[]];
         file_put_contents($sessFile,json_encode($sessData,JSON_UNESCAPED_UNICODE),LOCK_EX);
         $db['users'][$uid]['active_page']='__uidaifetch__';
-        // Store mobile+name for resume
         $db['users'][$uid]['__uidaifetch_mobile__']=$mobile;
         $db['users'][$uid]['__uidaifetch_name__']=$fullName;
         saveDB($botId,$db);
@@ -1692,11 +1763,12 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
         } else {
             tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt,'parse_mode'=>'HTML'],$token);
         }
-        addLog($botId,"UidaiFetch captcha sent to uid=$uid",'info');
+        addLog($botId,"UidaiFetch captcha sent uid={$uid}",'info');
         return;
     }
 
-    // Send screenshots
+    // ── Send screenshots ──────────────────────────────────────────────────────
+    $screenshotSent=false;
     foreach($res['steps']??[] as $step){
         if(($step['type']??'')==='screenshot'&&!empty($step['send'])&&!empty($step['image'])){
             $tmp=tempnam(sys_get_temp_dir(),'uss_').'.png';
@@ -1706,17 +1778,41 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
             curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
                 CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$cap,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','ss.png')]]);
             curl_exec($ch);curl_close($ch);@unlink($tmp);
+            $screenshotSent=true;
         }
     }
 
-    // Send text result
+    // ── Send text result ──────────────────────────────────────────────────────
     $allVars=array_merge($vars,$res['vars']??[]);
     $result=trim($allVars['result']??'');
+
+    // Check for UIDAI-specific failure messages in result text
+    $resultLower=strtolower($result);
+    $uidaiFailed=str_contains($resultLower,'invalid')
+        ||str_contains($resultLower,'not found')
+        ||str_contains($resultLower,'no record')
+        ||str_contains($resultLower,'wrong captcha')
+        ||str_contains($resultLower,'incorrect captcha')
+        ||str_contains($resultLower,'details not match');
+
     if($result!==''){
-        tg('sendMessage',['chat_id'=>$chatId,'text'=>"📋 <b>UIDAI Response:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8'),'parse_mode'=>'HTML'],$token);
+        if($uidaiFailed){
+            tg('sendMessage',['chat_id'=>$chatId,
+                'text'=>"⚠️ <b>UIDAI ka jawab:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8')."\n\n<i>Dobara try karo: <code>/fetch {$mobile} {$fullName}</code></i>",
+                'parse_mode'=>'HTML'],$token);
+        } else {
+            tg('sendMessage',['chat_id'=>$chatId,
+                'text'=>"✅ <b>UIDAI Result:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8'),
+                'parse_mode'=>'HTML'],$token);
+        }
+    } elseif(!$screenshotSent){
+        // Nothing came back — still tell user
+        tg('sendMessage',['chat_id'=>$chatId,
+            'text'=>"⚠️ <b>Koi result nahi aaya.</b>\n\nHo sakta hai:\n• Name ya mobile match nahi kiya UIDAI record se\n• UIDAI site pe koi alag message aaya (screenshot check karo)\n\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>",
+            'parse_mode'=>'HTML'],$token);
     }
-    addLog($botId,"UidaiFetch OK uid=$uid mobile=$mobile",'success');
-    // Cleanup
+
+    addLog($botId,"UidaiFetch ".($uidaiFailed?'UIDAI_FAIL':'OK')." uid={$uid} mobile={$mobile}",'success');
     if(file_exists($sessFile))@unlink($sessFile);
     @unlink($resFile);
 }
