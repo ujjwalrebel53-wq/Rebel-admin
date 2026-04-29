@@ -1806,7 +1806,20 @@ if(isset($_GET['webhook_bot'])){
             return null;
         };
 
-        $roseDoAction=function($action,$tUid,$tName,$reason='',$durSec=0) use($chatId,$token,$roseLog,$roseMention,$rose,$roseIsAdmin){
+        // Helper: send a rose bot message supporting tg-emoji entities
+        $roseSend=function($text,$extraParams=[]) use($chatId,$token){
+            $hasTgEmoji=(strpos((string)$text,'<tg-emoji')!==false);
+            if($hasTgEmoji){
+                $parsed=htmlToEntities((string)$text);
+                $p=array_merge(['chat_id'=>$chatId,'text'=>$parsed['text'],'entities'=>$parsed['entities']],$extraParams);
+                unset($p['parse_mode']);
+            } else {
+                $p=array_merge(['chat_id'=>$chatId,'text'=>$text,'parse_mode'=>'HTML'],$extraParams);
+            }
+            return tg('sendMessage',$p,$token);
+        };
+
+        $roseDoAction=function($action,$tUid,$tName,$reason='',$durSec=0) use($chatId,$token,$roseLog,$roseMention,$rose,$roseIsAdmin,$roseSend){
             $men=$roseMention($tUid,$tName);
             $esc=fn($s)=>htmlspecialchars($s,ENT_NOQUOTES,'UTF-8');
             $rm=$rose['reply_msgs']??[];
@@ -1822,7 +1835,7 @@ if(isset($_GET['webhook_bot'])){
                 case 'ban':
                     tg('banChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'revoke_messages'=>false],$token);
                     $banMsg=!empty($rm['ban'])?$applyRoseMsg($rm['ban']):"<b>User Banned!</b> 🚨\n👤 $men\n📝 Reason: ".($reason?$esc($reason):'No reason given');
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$banMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($banMsg);
                     $roseLog("🚫 Banned $tName ($tUid) | Reason: $reason");
                     break;
                 case 'sban':
@@ -1834,20 +1847,20 @@ if(isset($_GET['webhook_bot'])){
                     tg('banChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'until_date'=>$until,'revoke_messages'=>false],$token);
                     $ds=$durSec>0?gmdate('H\h i\m',$durSec):'forever';
                     $tbanMsg=!empty($rm['tban'])?$applyRoseMsg($rm['tban'],['duration'=>$ds]):"<b>User Temp Banned!</b> ⏳\n👤 $men\n⏱ Duration: $ds\n📝 Reason: ".($reason?$esc($reason):'No reason given');
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$tbanMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($tbanMsg);
                     $roseLog("⏳ TBanned $tName ($tUid) for $ds | Reason: $reason");
                     break;
                 case 'kick':
-                    if($roseIsAdmin($tUid)){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Cannot kick an admin!','parse_mode'=>'HTML'],$token);break;}
+                    if($roseIsAdmin($tUid)){$roseSend('❌ Cannot kick an admin!');break;}
                     tg('banChatMember',['chat_id'=>$chatId,'user_id'=>$tUid],$token);
                     usleep(300000);
                     tg('unbanChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'only_if_banned'=>true],$token);
                     $kickMsg=!empty($rm['kick'])?$applyRoseMsg($rm['kick']):"<b>User Kicked!</b> 👢\n👤 $men\n📝 Reason: ".($reason?$esc($reason):'No reason given');
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$kickMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($kickMsg);
                     $roseLog("👢 Kicked $tName ($tUid) | Reason: $reason");
                     break;
                 case 'skick':
-                    if($roseIsAdmin($tUid)){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Cannot kick an admin!','parse_mode'=>'HTML'],$token);break;}
+                    if($roseIsAdmin($tUid)){$roseSend('❌ Cannot kick an admin!');break;}
                     tg('banChatMember',['chat_id'=>$chatId,'user_id'=>$tUid],$token);
                     usleep(300000);
                     tg('unbanChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'only_if_banned'=>true],$token);
@@ -1856,20 +1869,20 @@ if(isset($_GET['webhook_bot'])){
                 case 'unban':
                     tg('unbanChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'only_if_banned'=>true],$token);
                     $unbanMsg=!empty($rm['unban'])?$applyRoseMsg($rm['unban']):"<b>User Unbanned!</b> ✅\n👤 $men";
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$unbanMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($unbanMsg);
                     break;
                 case 'mute':
                     $until2=$durSec>0?time()+$durSec:0;
                     tg('restrictChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'permissions'=>['can_send_messages'=>false,'can_send_media_messages'=>false,'can_send_other_messages'=>false,'can_add_web_page_previews'=>false],'until_date'=>$until2],$token);
                     $ds2=$durSec>0?gmdate('H\h i\m',$durSec):'forever';
                     $muteMsg=!empty($rm['mute'])?$applyRoseMsg($rm['mute'],['duration'=>$ds2]):"<b>User Muted!</b> 🔇\n👤 $men\n⏱ Duration: $ds2\n📝 Reason: ".($reason?$esc($reason):'No reason given');
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$muteMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($muteMsg);
                     $roseLog("🔇 Muted $tName ($tUid) for $ds2 | Reason: $reason");
                     break;
                 case 'unmute':
                     tg('restrictChatMember',['chat_id'=>$chatId,'user_id'=>$tUid,'permissions'=>['can_send_messages'=>true,'can_send_media_messages'=>true,'can_send_other_messages'=>true,'can_add_web_page_previews'=>true,'can_send_polls'=>true,'can_invite_users'=>true,'can_pin_messages'=>false,'can_change_info'=>false]],$token);
                     $unmuteMsg=!empty($rm['unmute'])?$applyRoseMsg($rm['unmute']):"<b>User Unmuted!</b> 🔊\n👤 $men";
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$unmuteMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($unmuteMsg);
                     break;
             }
         };
@@ -1927,7 +1940,7 @@ if(isset($_GET['webhook_bot'])){
                     $lmname=trim(($lm['first_name']??'').' '.($lm['last_name']??''));
                     $gbText=$gbCfg['text']??'Goodbye {first}!';
                     $gbText=str_replace(['{first}','{fullname}','{mention}'],[$lm['first_name']??'User',$lmname,'<a href="tg://user?id='.(string)$lm['id'].'">'.$lmname.'</a>'],$gbText);
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$gbText,'parse_mode'=>'HTML'],$token);
+                    $roseSend($gbText);
                 }
             }
             if(!empty($rose['cleanservice'])){
@@ -1951,7 +1964,7 @@ if(isset($_GET['webhook_bot'])){
                     $faction=$flood['action']??'mute';$fdur=(int)($flood['mute_duration']??5)*60;
                     tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$msg['message_id']],$token);
                     $floodMsg=!empty($rose['reply_msgs']['flood'])?$rose['reply_msgs']['flood']:'⚠️ <b>Flood Detected!</b> Slow down!';
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>$floodMsg,'parse_mode'=>'HTML'],$token);
+                    $roseSend($floodMsg);
                     $roseDoAction($faction,$uid,$name,'Flooding',$fdur);
                     http_response_code(200);exit;
                 }
@@ -1970,10 +1983,20 @@ if(isset($_GET['webhook_bot'])){
                         $bact=$rose['blacklist_action']??'delete';
                         if($bact==='warn'){
                             $wr=$roseWarn($uid,$name,'Blacklisted word: '.$bword);
-                            tg('sendMessage',['chat_id'=>$chatId,'text'=>"⚠️ <b>Warning {$wr['count']}/{$wr['limit']}</b>\n👤 {$wr['mention']}\n📝 Blacklisted word used.",'parse_mode'=>'HTML'],$token);
-                            if($wr['reached']){$db['rose_warns'][$chatId.'_'.$uid]=[];saveDB($botId,$db);$roseDoAction($rose['warn_action']??'kick',$uid,$name,'Warn limit reached');}
+                            $rm2bl=$rose['reply_msgs']??[];
+                            $blWarnTmpl=!empty($rm2bl['warn'])?$rm2bl['warn']:'⚠️ <b>Warning {count}/{limit}</b>'."\n👤 {mention}\n📝 {reason}";
+                            $blWarnMsg=str_replace(['{mention}','{count}','{limit}','{reason}'],[$wr['mention'],(string)$wr['count'],(string)$wr['limit'],'Blacklisted word used.'],$blWarnTmpl);
+                            $roseSend($blWarnMsg);
+                            if($wr['reached']){
+                                $db['rose_warns'][$chatId.'_'.$uid]=[];saveDB($botId,$db);
+                                $blWact=$rose['warn_action']??'kick';$blWdur=($blWact==='mute')?(int)($rose['warn_mute_duration']??60)*60:0;
+                                $blWlTmpl=!empty($rm2bl['warn_limit'])?$rm2bl['warn_limit']:'🚨 {mention} has hit the warn limit! Action: <b>{action}</b>';
+                                $blWlMsg=str_replace(['{mention}','{action}'],[$wr['mention'],$blWact],$blWlTmpl);
+                                $roseSend($blWlMsg);
+                                $roseDoAction($blWact,$uid,$name,'Warn limit reached',$blWdur);
+                            }
                         }elseif($bact==='ban'){$roseDoAction('ban',$uid,$name,'Blacklisted word: '.$bword);}
-                        else{$blMsg=!empty($rose['reply_msgs']['blacklist'])?$rose['reply_msgs']['blacklist']:'⚠️ That word is not allowed here.';tg('sendMessage',['chat_id'=>$chatId,'text'=>$blMsg,'parse_mode'=>'HTML'],$token);}
+                        else{$blMsg=!empty($rose['reply_msgs']['blacklist'])?$rose['reply_msgs']['blacklist']:'⚠️ That word is not allowed here.';$roseSend($blMsg);}
                         http_response_code(200);exit;
                     }
                 }
@@ -1999,7 +2022,9 @@ if(isset($_GET['webhook_bot'])){
                 if(!$shouldDel&&!empty($locks['all'])){$shouldDel=true;$lockReason='All messages';}
                 if($shouldDel){
                     tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$msg['message_id']],$token);
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"🔒 <b>$lockReason are locked</b> in this group.",'parse_mode'=>'HTML'],$token);
+                    $lockTmpl=!empty($rose['reply_msgs']['locked'])?$rose['reply_msgs']['locked']:'🔒 <b>{locktype} are locked</b> in this group.';
+                    $lockMsg=str_replace('{locktype}',$lockReason,$lockTmpl);
+                    $roseSend($lockMsg);
                     http_response_code(200);exit;
                 }
             }
@@ -2061,7 +2086,7 @@ if(isset($_GET['webhook_bot'])){
 
             if((stripos($msgText,'@admin')!==false||str_starts_with($msgText,'/report'))&&!empty($rose['report']['enabled'])){
                 $rreply2=trim($rose['report']['reply']??'🚨 Report submitted to admins!');
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>$rreply2,'parse_mode'=>'HTML','reply_to_message_id'=>$msg['message_id']],$token);
+                $roseSend($rreply2,['reply_to_message_id'=>$msg['message_id']]);
                 $adminsR2=tg('getChatAdministrators',['chat_id'=>$chatId],$token);
                 $rReporter2=$roseMention($uid,$name);
                 $rptMsg2="🚨 <b>Report received!</b>\n👤 Reporter: {$rReporter2}\n🏠 Chat: ".htmlspecialchars($msg['chat']['title']??'',ENT_NOQUOTES,'UTF-8')." (<code>{$chatId}</code>)";
@@ -2090,28 +2115,44 @@ if(isset($_GET['webhook_bot'])){
             $esc2=fn($s)=>htmlspecialchars($s,ENT_NOQUOTES,'UTF-8');
 
             if($rcmdStr==='warn'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins can warn users!'],$token);http_response_code(200);exit;}
-                if(!$rTarget){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Who should I warn? Reply to their message or give a username.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins can warn users!');http_response_code(200);exit;}
+                if(!$rTarget){$roseSend('❌ Who should I warn? Reply to their message or give a username.');http_response_code(200);exit;}
                 $wr=$roseWarn($rTarget['id'],$rTarget['name'],$rReason?:null);
+                $rm2=$rose['reply_msgs']??[];
                 $wKb=json_encode(['inline_keyboard'=>[[['text'=>'🗑 Remove warn','callback_data'=>'rose_rmwarn|'.$rTarget['id'].'|'.($wr['count']-1)]]]]);
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"<b>{$wr['mention']} has been warned!</b> [{$wr['count']}/{$wr['limit']}]\nReason: ".($rReason?$esc2($rReason):'No reason given'),'parse_mode'=>'HTML','reply_markup'=>$wKb],$token);
+                $warnTmpl=!empty($rm2['warn'])?$rm2['warn']:'⚠️ <b>{mention} has been warned!</b> [{count}/{limit}]'."\nReason: {reason}";
+                $warnMsg=str_replace(['{mention}','{count}','{limit}','{reason}'],[$wr['mention'],(string)$wr['count'],(string)$wr['limit'],$rReason?$esc2($rReason):'No reason given'],$warnTmpl);
+                $roseSend($warnMsg,['reply_markup'=>$wKb]);
                 if($wr['reached']){
                     $db['rose_warns'][$chatId.'_'.$rTarget['id']]=[];saveDB($botId,$db);
                     $wact=$rose['warn_action']??'kick';
                     $wdur=($wact==='mute')?(int)($rose['warn_mute_duration']??60)*60:0;
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"{$wr['mention']} has hit the warn limit! Action: <b>$wact</b>",'parse_mode'=>'HTML'],$token);
+                    $wlTmpl=!empty($rm2['warn_limit'])?$rm2['warn_limit']:'🚨 {mention} has hit the warn limit! Action: <b>{action}</b>';
+                    $wlMsg=str_replace(['{mention}','{action}'],[$wr['mention'],$wact],$wlTmpl);
+                    $roseSend($wlMsg);
                     $roseDoAction($wact,$rTarget['id'],$rTarget['name'],'Warn limit reached',$wdur);
                 }
                 http_response_code(200);exit;
             }
 
             if($rcmdStr==='dwarn'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
-                if(!$rTarget){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Reply to a message to warn+delete.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
+                if(!$rTarget){$roseSend('❌ Reply to a message to warn+delete.');http_response_code(200);exit;}
                 if(!empty($msg['reply_to_message']['message_id']))tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$msg['reply_to_message']['message_id']],$token);
                 $wr=$roseWarn($rTarget['id'],$rTarget['name'],$rReason?:null);
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"<b>{$wr['mention']} has been warned!</b> [{$wr['count']}/{$wr['limit']}]",'parse_mode'=>'HTML'],$token);
-                if($wr['reached']){$db['rose_warns'][$chatId.'_'.$rTarget['id']]=[];saveDB($botId,$db);$roseDoAction($rose['warn_action']??'kick',$rTarget['id'],$rTarget['name'],'Warn limit reached');}
+                $rm2=$rose['reply_msgs']??[];
+                $warnTmpl2=!empty($rm2['warn'])?$rm2['warn']:'⚠️ <b>{mention} has been warned!</b> [{count}/{limit}]'."\nReason: {reason}";
+                $warnMsg2=str_replace(['{mention}','{count}','{limit}','{reason}'],[$wr['mention'],(string)$wr['count'],(string)$wr['limit'],$rReason?$esc2($rReason):'No reason given'],$warnTmpl2);
+                $roseSend($warnMsg2);
+                if($wr['reached']){
+                    $db['rose_warns'][$chatId.'_'.$rTarget['id']]=[];saveDB($botId,$db);
+                    $wact2=$rose['warn_action']??'kick';
+                    $wdur2=($wact2==='mute')?(int)($rose['warn_mute_duration']??60)*60:0;
+                    $wlTmpl2=!empty($rm2['warn_limit'])?$rm2['warn_limit']:'🚨 {mention} has hit the warn limit! Action: <b>{action}</b>';
+                    $wlMsg2=str_replace(['{mention}','{action}'],[$wr['mention'],$wact2],$wlTmpl2);
+                    $roseSend($wlMsg2);
+                    $roseDoAction($wact2,$rTarget['id'],$rTarget['name'],'Warn limit reached',$wdur2);
+                }
                 http_response_code(200);exit;
             }
 
@@ -2243,35 +2284,44 @@ if(isset($_GET['webhook_bot'])){
             }
 
             if($rcmdStr==='purge'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
-                if(empty($msg['reply_to_message']['message_id'])){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Reply to the message you want to start purging from.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
+                if(empty($msg['reply_to_message']['message_id'])){$roseSend('❌ Reply to the message you want to start purging from.');http_response_code(200);exit;}
                 $fromMsgId=(int)$msg['reply_to_message']['message_id'];$curMsgId=(int)$msg['message_id'];
                 $deleted=0;
                 for($pmi=$fromMsgId;$pmi<=$curMsgId;$pmi++){$r3=tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$pmi],$token);if($r3['ok']??false)$deleted++;}
-                $notif=tg('sendMessage',['chat_id'=>$chatId,'text'=>"🗑 Purged $deleted messages.",'parse_mode'=>'HTML'],$token);
+                $rm2=$rose['reply_msgs']??[];
+                $purgedTmpl=!empty($rm2['purged'])?$rm2['purged']:'🗑 Purged {count} messages.';
+                $purgedMsg=str_replace('{count}',(string)$deleted,$purgedTmpl);
+                $notif=$roseSend($purgedMsg);
                 usleep(2000000);
                 if(!empty($notif['result']['message_id']))tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$notif['result']['message_id']],$token);
                 http_response_code(200);exit;
             }
 
             if($rcmdStr==='promote'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
-                if(!$rTarget){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Reply or username.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
+                if(!$rTarget){$roseSend('❌ Reply or username.');http_response_code(200);exit;}
                 $title=trim($rReason);
                 $pp=['chat_id'=>$chatId,'user_id'=>$rTarget['id'],'can_manage_chat'=>true,'can_delete_messages'=>true,'can_restrict_members'=>true,'can_pin_messages'=>true,'can_invite_users'=>true,'can_change_info'=>false,'can_promote_members'=>false,'can_manage_video_chats'=>true,'is_anonymous'=>false];
                 if($title)$pp['custom_title']=$title;
                 tg('promoteChatMember',$pp,$token);
                 $men2=$roseMention($rTarget['id'],$rTarget['name']);
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"⬆️ <b>Promoted!</b>\n👤 $men2".($title?"\n🏷 Title: $title":''),'parse_mode'=>'HTML'],$token);
+                $rm2=$rose['reply_msgs']??[];
+                $promTmpl=!empty($rm2['promoted'])?$rm2['promoted']:'⬆️ <b>Promoted!</b>'."\n👤 {mention}";
+                $promMsg=str_replace('{mention}',$men2,$promTmpl).($title?"\n🏷 Title: ".htmlspecialchars($title,ENT_NOQUOTES,'UTF-8'):'');
+                $roseSend($promMsg);
                 http_response_code(200);exit;
             }
 
             if($rcmdStr==='demote'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
-                if(!$rTarget){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Reply or username.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
+                if(!$rTarget){$roseSend('❌ Reply or username.');http_response_code(200);exit;}
                 tg('promoteChatMember',['chat_id'=>$chatId,'user_id'=>$rTarget['id'],'can_manage_chat'=>false,'can_delete_messages'=>false,'can_restrict_members'=>false,'can_pin_messages'=>false,'can_invite_users'=>false,'can_change_info'=>false],$token);
                 $men2=$roseMention($rTarget['id'],$rTarget['name']);
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"⬇️ <b>Demoted!</b>\n👤 $men2",'parse_mode'=>'HTML'],$token);
+                $rm2=$rose['reply_msgs']??[];
+                $demTmpl=!empty($rm2['demoted'])?$rm2['demoted']:'⬇️ <b>Demoted!</b>'."\n👤 {mention}";
+                $demMsg=str_replace('{mention}',$men2,$demTmpl);
+                $roseSend($demMsg);
                 http_response_code(200);exit;
             }
 
@@ -2285,26 +2335,31 @@ if(isset($_GET['webhook_bot'])){
             }
 
             if($rcmdStr==='pin'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
-                if(empty($msg['reply_to_message']['message_id'])){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Reply to the message you want to pin.'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
+                if(empty($msg['reply_to_message']['message_id'])){$roseSend('❌ Reply to the message you want to pin.');http_response_code(200);exit;}
                 $loud=strtolower($rquery)!=='silent';
                 tg('pinChatMessage',['chat_id'=>$chatId,'message_id'=>$msg['reply_to_message']['message_id'],'disable_notification'=>!$loud],$token);
-                if(strtolower($rquery)==='silent')tg('sendMessage',['chat_id'=>$chatId,'text'=>'📌 Pinned silently.'],$token);
+                $rm2=$rose['reply_msgs']??[];
+                $pinTmpl=!empty($rm2['pinned'])?$rm2['pinned']:'📌 Message pinned.';
+                if(strtolower($rquery)==='silent')$roseSend('📌 Pinned silently.');
+                else $roseSend($pinTmpl);
                 http_response_code(200);exit;
             }
 
             if($rcmdStr==='unpin'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
                 if(!empty($msg['reply_to_message']['message_id'])){tg('unpinChatMessage',['chat_id'=>$chatId,'message_id'=>$msg['reply_to_message']['message_id']],$token);}
                 else{tg('unpinChatMessage',['chat_id'=>$chatId],$token);}
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>'📌 Message unpinned.'],$token);
+                $rm2=$rose['reply_msgs']??[];
+                $unpinTmpl=!empty($rm2['unpinned'])?$rm2['unpinned']:'📌 Message unpinned.';
+                $roseSend($unpinTmpl);
                 http_response_code(200);exit;
             }
 
             if($rcmdStr==='unpinall'){
-                if(!$rIsAdmin){tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ Only admins!'],$token);http_response_code(200);exit;}
+                if(!$rIsAdmin){$roseSend('❌ Only admins!');http_response_code(200);exit;}
                 tg('unpinAllChatMessages',['chat_id'=>$chatId],$token);
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>'📌 All messages unpinned.'],$token);
+                $roseSend('📌 All messages unpinned.');
                 http_response_code(200);exit;
             }
 
