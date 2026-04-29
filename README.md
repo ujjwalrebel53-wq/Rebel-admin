@@ -43,7 +43,15 @@ The panel writes a `.admin_hash` file when you change password. This persists ac
 
 ## Browser Automation (Site Automator)
 
-The **Flow Builder** supports a `Browser (Selenium/Playwright)` page type that lets you automate any website directly from Telegram commands.
+The **Flow Builder** supports a `Browser (Selenium/Playwright)` page type that lets you automate any website directly from Telegram commands. The **Link Automation** section also supports full browser mode with the same step engine.
+
+### Anti-Bot / Stealth Features
+
+- Realistic Chrome user-agent (`Chrome/124`)
+- `navigator.webdriver` property hidden via init script
+- `AutomationControlled` flag disabled
+- Indian locale (`en-IN`) and timezone (`Asia/Kolkata`) set
+- Playwright context created with viewport 1920×1080
 
 ### Auto-detected Drivers
 
@@ -54,17 +62,18 @@ The **Flow Builder** supports a `Browser (Selenium/Playwright)` page type that l
 
 | Step | Description |
 |---|---|
-| 🌐 Open URL | Navigate to a URL |
-| 👆 Click | Click element by CSS/XPath selector |
+| 🌐 Open URL | Navigate to URL (tries `networkidle` → `domcontentloaded` → `load`) |
+| ⌚ Wait Load | Explicit page load state wait (`networkidle` / `domcontentloaded` / `load`) |
+| 👆 Click | Click element by CSS/XPath selector or X,Y coordinates |
 | 👆👆 Double Click | Double-click element |
 | 🖱 Right Click | Context-menu click |
 | ⌨️ Fill Input | Clear + type into field |
-| ⌨️ Type Slow | Human-like typing with delay per character |
+| ⌨️ Type Slow | Human-like typing with configurable delay per character |
 | 🗑 Clear Field | Clear an input field |
 | 📸 Screenshot | Capture & optionally send to user |
 | 🔐 Ask Captcha | Pause, show captcha screenshot, resume after user reply |
 | ⏱ Wait | Sleep N seconds |
-| ⌛ Wait Element | Wait for element to appear |
+| ⌛ Wait Element | Wait for element to appear (CSS or XPath) |
 | ⌛ Wait URL | Wait until URL contains a string |
 | ↕️ Scroll | Scroll page by pixels |
 | 📋 Get Text→Var | Extract element text to variable |
@@ -76,7 +85,7 @@ The **Flow Builder** supports a `Browser (Selenium/Playwright)` page type that l
 | 🖱 Hover | Hover over element |
 | ↔️ Drag & Drop | Drag element to target |
 | 📁 Upload File | Set file input path |
-| 🖼 Switch to IFrame | Enter an iframe context |
+| 🖼 Switch to IFrame | Enter an iframe context (Playwright FrameLocator) |
 | 🖼 Switch to Main Frame | Return to main page |
 | 🍪 Set Cookie | Set cookie name=value |
 | 🍪 Get Cookie→Var | Read cookie value to variable |
@@ -93,6 +102,27 @@ Click a template button to pre-fill common flows:
 - **📊 Data Scrape** — extract title, price, link, item count via JS
 - **📝 Sign Up** — register form with password confirm
 
+### UIDAI / MyAadhaar Templates (Link Automation → Browser Mode)
+
+Three ready-made flows available via the **UIDAI Templates** buttons in Link Automation → Browser Mode:
+
+| Template | Description |
+|---|---|
+| 🆔 Verify Aadhaar | Opens `myaadhaar.uidai.gov.in/verifyAadhaar`, fills Aadhaar number from user input (`{query}`), asks captcha, submits, returns result |
+| 📋 Aadhaar Status | Opens `myaadhaar.uidai.gov.in/CheckAadhaarStatus`, fills EID from `{query}`, asks captcha, returns status |
+| 🔒 Lock/Unlock UID | Opens `myaadhaar.uidai.gov.in/lock-unlock-uid`, fills Aadhaar, asks captcha, sends OTP |
+
+**Setup:**
+1. Go to **Link Automation** → Enable → **+ Add Rule**
+2. Set **Trigger Keyword** (e.g. `verify`) and **Trigger Mode** = `startswith` for commands like `verify 123412341234`
+3. Enable **Browser Mode**
+4. Click the desired **UIDAI Template** button
+5. Adjust selectors if needed (UIDAI may update their page)
+6. Set **Reply Template** to show `{result}` to the user
+7. Save
+
+> **Note:** UIDAI's portal is a JavaScript-heavy Angular app. The automation uses `networkidle` wait and anti-detection flags. If selectors change, use **Raw Python** step or update CSS selectors manually.
+
 ### Variable System
 
 - `{var1}` `{var2}` — positional command arguments
@@ -101,6 +131,12 @@ Click a template button to pre-fill common flows:
 - `{random:MYVAR}` — pick random item from comma-separated `{MYVAR}`
 - `{result}` `{anyvar}` — values set by Get Text / Get Attr / JS Eval steps
 - API key names from the vault: `{MYAPI_KEY}`
+
+### Link Automation — Additional Variables
+
+- `{query}` — full message text sent by user
+- `{query_arg}` — text after the trigger keyword (for `startswith` mode, e.g. trigger=`verify`, user sends `verify 123456789012` → `{query_arg}` = `123456789012`)
+- `{tg_name}` `{tg_id}` `{tg_username}` — same Telegram user variables
 
 ---
 

@@ -753,7 +753,9 @@ def av(t):
         pts=[x.strip() for x in str(V.get(m.group(1),'')).split(',') if x.strip()]
         return random.choice(pts) if pts else ''
     return re.sub(r'\{random:([^}]+)\}',rr,t)
-P=None;B=None;PW=False;_p=None
+_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+_STEALTH_ARGS=['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--disable-infobars','--window-size=1920,1080','--disable-gpu','--lang=en-IN','--disable-extensions','--no-first-run','--ignore-certificate-errors']
+P=None;B=None;PW=False;_p=None;_PW_CTX=None
 try:
     from playwright.sync_api import sync_playwright
     _p=sync_playwright().__enter__();PW=True
@@ -762,8 +764,9 @@ if PW:
     ok=False
     for ch in ['chrome','msedge',None]:
         try:
-            B=_p.chromium.launch(channel=ch,headless=True,args=['--no-sandbox']) if ch else _p.chromium.launch(headless=True,args=['--no-sandbox'])
-            ok=True;break
+            _bargs=_STEALTH_ARGS[:]
+            _b=_p.chromium.launch(channel=ch,headless=True,args=_bargs) if ch else _p.chromium.launch(headless=True,args=_bargs)
+            ok=True;B=_b;break
         except: pass
     if not ok: PW=False
 if not PW:
@@ -774,42 +777,61 @@ if not PW:
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options as CO
         o=CO()
-        for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--window-size=1920,1080','--disable-blink-features=AutomationControlled']: o.add_argument(a)
+        for a in _STEALTH_ARGS+['--headless=new']: o.add_argument(a)
+        o.add_experimental_option('excludeSwitches',['enable-automation'])
+        o.add_experimental_option('useAutomationExtension',False)
+        o.add_argument(f'--user-agent={_UA}')
         try: B=webdriver.Chrome(options=o)
         except:
             try:
                 from selenium.webdriver.chromium.options import ChromiumOptions
                 o2=ChromiumOptions()
-                for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage']: o2.add_argument(a)
+                for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--window-size=1920,1080']: o2.add_argument(a)
+                o2.add_argument(f'--user-agent={_UA}')
                 B=webdriver.Chrome(options=o2)
             except Exception as e:
                 R['status']='error';R['error']='No browser: '+str(e)
                 open(RF,'w').write(json.dumps(R));sys.exit(1)
+        try: B.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':'Object.defineProperty(navigator,"webdriver",{get:()=>undefined})'})
+        except: pass
     except ImportError as e:
         R['status']='error';R['error']='selenium missing: '+str(e)
         open(RF,'w').write(json.dumps(R));sys.exit(1)
+def _pw_goto(url,timeout=45000):
+    global P
+    try: P.goto(url,wait_until='networkidle',timeout=timeout)
+    except:
+        try: P.goto(url,wait_until='domcontentloaded',timeout=timeout)
+        except: P.goto(url,wait_until='load',timeout=timeout)
 if FROM>0 and os.path.exists(SF):
     try:
-        ss=json.load(open(SF))
+        ss_d=json.load(open(SF))
         if PW:
-            ctx=B.new_context(storage_state=ss.get('storage',{}))
-            P=ctx.new_page();P.set_viewport_size({'width':1920,'height':1080})
-            if ss.get('url'): P.goto(ss['url'],wait_until='domcontentloaded',timeout=30000)
+            _PW_CTX=B.new_context(storage_state=ss_d.get('storage',{}),user_agent=_UA,viewport={'width':1920,'height':1080},locale='en-IN',timezone_id='Asia/Kolkata')
+            _PW_CTX.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            P=_PW_CTX.new_page()
+            if ss_d.get('url'): _pw_goto(ss_d['url'])
         else:
-            if ss.get('url'): B.get(ss['url'])
-            for ck in ss.get('cookies',[]):
+            if ss_d.get('url'): B.get(ss_d['url'])
+            for ck in ss_d.get('cookies',[]):
                 try: B.add_cookie(ck)
                 except: pass
-        V.update(ss.get('vars',{}))
+        V.update(ss_d.get('vars',{}))
     except: pass
 else:
-    if PW: P=B.new_page();P.set_viewport_size({'width':1920,'height':1080})
+    if PW:
+        _PW_CTX=B.new_context(user_agent=_UA,viewport={'width':1920,'height':1080},locale='en-IN',timezone_id='Asia/Kolkata')
+        _PW_CTX.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+        P=_PW_CTX.new_page()
+_CTX_FRAME=[None]
 def curl(): return P.url if PW else B.current_url
+def _act_page(): return _CTX_FRAME[0] if _CTX_FRAME[0] is not None else P
 def ss(crop=None):
     f=tempfile.mktemp(suffix='.png')
     if PW:
-        if crop and all(crop): P.screenshot(path=f,clip={'x':float(crop[0]),'y':float(crop[1]),'width':float(crop[2]),'height':float(crop[3])})
-        else: P.screenshot(path=f,full_page=False)
+        pg=_act_page()
+        if crop and all(crop): pg.screenshot(path=f,clip={'x':float(crop[0]),'y':float(crop[1]),'width':float(crop[2]),'height':float(crop[3])})
+        else: pg.screenshot(path=f,full_page=False)
     else:
         B.save_screenshot(f)
         if crop and all(crop):
@@ -819,7 +841,8 @@ def ss(crop=None):
             except: pass
     d=base64.b64encode(open(f,'rb').read()).decode();os.unlink(f);return d
 def fel(sel):
-    if PW: return P.locator(sel).first
+    pg=_act_page() if PW else None
+    if PW: return pg.locator(sel).first
     try: return B.find_element(By.CSS_SELECTOR,sel)
     except:
         try: return B.find_element(By.XPATH,sel)
@@ -830,14 +853,21 @@ for i,st in enumerate(steps):
     t=st.get('type','open')
     try:
         if t=='open':
+            _CTX_FRAME[0]=None
             u=av(st.get('value',''))
-            if PW: P.goto(u,wait_until='domcontentloaded',timeout=30000)
+            if PW: _pw_goto(u)
             else: B.get(u)
         elif t=='wait': time.sleep(float(av(str(st.get('value','2')))))
+        elif t=='wait_load':
+            state=av(st.get('value','networkidle'));to=int(float(st.get('timeout',15))*1000)
+            if PW: P.wait_for_load_state(state,timeout=to)
+            else: time.sleep(2)
         elif t=='wait_element':
             s=av(st.get('selector',''));to=float(st.get('timeout',10))
-            if PW: P.wait_for_selector(s,timeout=int(to*1000))
-            else: WebDriverWait(B,to).until(EC.presence_of_element_located((By.CSS_SELECTOR,s)))
+            if PW: _act_page().wait_for_selector(s,timeout=int(to*1000))
+            else:
+                by=By.XPATH if s.startswith('//') or s.startswith('(//') else By.CSS_SELECTOR
+                WebDriverWait(B,to).until(EC.presence_of_element_located((by,s)))
         elif t=='click':
             x=st.get('x','');y=st.get('y','')
             if x and y:
@@ -846,19 +876,20 @@ for i,st in enumerate(steps):
                     from selenium.webdriver.common.action_chains import ActionChains
                     ActionChains(B).move_by_offset(float(x),float(y)).click().perform()
             else:
-                el=fel(av(st.get('selector','')))
-                if PW: el.click()
-                else: el.click()
+                pg=_act_page()
+                s=av(st.get('selector',''))
+                if PW: pg.locator(s).first.click()
+                else: fel(s).click()
         elif t=='fill':
             s=av(st.get('selector',''));v=av(st.get('value',''))
-            if PW: P.fill(s,v)
+            if PW: _act_page().fill(s,v)
             else: el=fel(s);el.clear();el.send_keys(v)
         elif t=='scroll':
             v=float(av(str(st.get('value','500'))))
             if PW: P.mouse.wheel(0,v)
             else: B.execute_script(f'window.scrollBy(0,{v})')
         elif t=='reload':
-            if PW: P.reload()
+            if PW: P.reload();P.wait_for_load_state('domcontentloaded')
             else: B.refresh()
         elif t=='key':
             v=av(st.get('value',''))
@@ -868,17 +899,17 @@ for i,st in enumerate(steps):
                 B.find_element(By.TAG_NAME,'body').send_keys(getattr(Keys,v.upper(),v))
         elif t=='select':
             s=av(st.get('selector',''));v=av(st.get('value',''))
-            if PW: P.select_option(s,v)
+            if PW: _act_page().select_option(s,v)
             else: Select(fel(s)).select_by_visible_text(v)
         elif t=='hover':
             s=av(st.get('selector',''))
-            if PW: P.hover(s)
+            if PW: _act_page().hover(s)
             else:
                 from selenium.webdriver.common.action_chains import ActionChains
                 ActionChains(B).move_to_element(fel(s)).perform()
         elif t=='get_text':
             s=av(st.get('selector',''));vn=st.get('var_name','result')
-            txt=P.locator(s).first.inner_text() if PW else fel(s).text
+            txt=_act_page().locator(s).first.inner_text() if PW else fel(s).text
             V[vn]=txt;R['steps'].append({'i':i,'type':t,'status':'ok','value':txt});continue
         elif t=='screenshot':
             crop=[st.get('crop_x'),st.get('crop_y'),st.get('crop_w'),st.get('crop_h')]
@@ -888,7 +919,7 @@ for i,st in enumerate(steps):
             crop=[st.get('crop_x'),st.get('crop_y'),st.get('crop_w'),st.get('crop_h')]
             b64=ss(crop)
             sd={'url':curl(),'vars':V,'resume_from':i+1,'captcha_var':st.get('var_name','captcha')}
-            if PW: sd['storage']=P.context.storage_state()
+            if PW: sd['storage']=_PW_CTX.storage_state() if _PW_CTX else {}
             else: sd['cookies']=B.get_cookies()
             open(SF,'w').write(json.dumps(sd))
             R['status']='captcha_needed';R['captcha_image']=b64
@@ -901,10 +932,10 @@ for i,st in enumerate(steps):
             pts=[x.strip() for x in src.split(',') if x.strip()]
             V[vn]=random.choice(pts) if pts else ''
         elif t=='raw':
-            exec(av(st.get('value','')),{'P':P,'PAGE':P,'B':B,'BROWSER':B,'V':V,'av':av,'ss':ss,'R':R})
+            exec(av(st.get('value','')),{'P':P,'PAGE':P,'B':B,'BROWSER':B,'V':V,'av':av,'ss':ss,'R':R,'_FRAME':_CTX_FRAME[0],'_PW_CTX':_PW_CTX,'_act_page':_act_page})
         elif t=='get_attr':
             s=av(st.get('selector',''));attr=av(st.get('attribute','href'));vn=st.get('var_name','result')
-            val=P.locator(s).first.get_attribute(attr) if PW else fel(s).get_attribute(attr)
+            val=_act_page().locator(s).first.get_attribute(attr) if PW else fel(s).get_attribute(attr)
             V[vn]=val or '';R['steps'].append({'i':i,'type':t,'status':'ok','value':val});continue
         elif t=='js_eval':
             code=av(st.get('value',''));vn=st.get('var_name','js_result')
@@ -912,38 +943,46 @@ for i,st in enumerate(steps):
             V[vn]=str(val) if val is not None else '';R['steps'].append({'i':i,'type':t,'status':'ok','value':str(val)});continue
         elif t=='assert_text':
             s=av(st.get('selector',''));expected=av(st.get('value',''))
-            actual=P.locator(s).first.inner_text() if PW else fel(s).text
+            actual=_act_page().locator(s).first.inner_text() if PW else fel(s).text
             if expected.lower() not in actual.lower(): raise Exception(f'Assert failed: expected "{expected}" in "{actual}"')
         elif t=='upload_file':
             s=av(st.get('selector',''));path=av(st.get('value',''))
-            if PW: P.set_input_files(s,path)
+            if PW: _act_page().set_input_files(s,path)
             else: fel(s).send_keys(path)
         elif t=='iframe_switch':
             s=av(st.get('selector',''))
-            if PW: P.frame_locator(s).locator('body').wait_for(timeout=5000)
+            if PW:
+                _CTX_FRAME[0]=P.frame_locator(s)
+                try: _CTX_FRAME[0].locator('body').wait_for(timeout=8000)
+                except: pass
             else:
                 iframe=fel(s);B.switch_to.frame(iframe)
         elif t=='iframe_main':
+            _CTX_FRAME[0]=None
             if not PW: B.switch_to.default_content()
         elif t=='cookie_set':
             name=av(st.get('name',''));val2=av(st.get('value',''))
-            if PW: P.context.add_cookies([{'name':name,'value':val2,'url':curl()}])
+            if PW: _PW_CTX.add_cookies([{'name':name,'value':val2,'url':curl()}]) if _PW_CTX else None
             else: B.add_cookie({'name':name,'value':val2})
         elif t=='cookie_get':
             name=av(st.get('name',''));vn=st.get('var_name','cookie_val')
             if PW:
-                cks=P.context.cookies();match=[c['value'] for c in cks if c['name']==name]
+                cks=_PW_CTX.cookies() if _PW_CTX else []
+                match=[c['value'] for c in cks if c['name']==name]
                 V[vn]=match[0] if match else ''
             else:
                 cks=B.get_cookies();match=[c['value'] for c in cks if c['name']==name]
                 V[vn]=match[0] if match else ''
             R['steps'].append({'i':i,'type':t,'status':'ok','value':V[vn]});continue
         elif t=='type_slow':
-            s=av(st.get('selector',''));txt=av(st.get('value',''));delay=float(st.get('delay_ms',50))/1000
-            if PW: P.type(s,txt,delay=float(st.get('delay_ms',50)))
+            s=av(st.get('selector',''));txt=av(st.get('value',''));dms=float(st.get('delay_ms',80))
+            if PW:
+                _act_page().locator(s).first.click()
+                _act_page().locator(s).first.fill('')
+                _act_page().locator(s).first.type(txt,delay=dms)
             else:
                 el=fel(s);el.clear()
-                for ch in txt: el.send_keys(ch);time.sleep(delay)
+                for ch in txt: el.send_keys(ch);time.sleep(dms/1000)
         elif t=='wait_url':
             expected=av(st.get('value',''));timeout=float(st.get('timeout',10))
             if PW: P.wait_for_url(f'**{expected}**',timeout=int(timeout*1000))
@@ -954,17 +993,17 @@ for i,st in enumerate(steps):
                     _t.sleep(0.5)
         elif t=='clear_field':
             s=av(st.get('selector',''))
-            if PW: P.fill(s,'')
+            if PW: _act_page().fill(s,'')
             else: el=fel(s);el.clear()
         elif t=='double_click':
             s=av(st.get('selector',''))
-            if PW: P.dblclick(s)
+            if PW: _act_page().dblclick(s)
             else:
                 from selenium.webdriver.common.action_chains import ActionChains
                 ActionChains(B).double_click(fel(s)).perform()
         elif t=='right_click':
             s=av(st.get('selector',''))
-            if PW: P.click(s,button='right')
+            if PW: _act_page().click(s,button='right')
             else:
                 from selenium.webdriver.common.action_chains import ActionChains
                 ActionChains(B).context_click(fel(s)).perform()
@@ -980,7 +1019,9 @@ for i,st in enumerate(steps):
         if st.get('stop_on_error'): R['status']='error';break
 R['vars']=V
 try:
-    if PW: B.close();_p.__exit__(None,None,None)
+    if PW:
+        if _PW_CTX: _PW_CTX.close()
+        B.close();_p.__exit__(None,None,None)
     else: B.quit()
 except: pass
 open(RF,'w').write(json.dumps(R))
@@ -1320,6 +1361,17 @@ function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$tok
     $ruleId=$rule['id'];
     $varMap=buildVarMap($u,$s,$msgText);
     $vars=$varMap;
+    // For startswith/contains trigger mode, also expose the argument part after the trigger keyword as {query_arg}
+    $triggerKw=strtolower(trim($rule['trigger']??''));
+    $tMode=$rule['trigger_mode']??'exact';
+    if($tMode==='startswith'&&$triggerKw!==''){
+        $after=ltrim(substr($msgText,strlen($triggerKw)));
+        $vars['query_arg']=$after;
+    } elseif($tMode==='contains'&&$triggerKw!==''){
+        $vars['query_arg']=$msgText;
+    } else {
+        $vars['query_arg']='';
+    }
     foreach($db['dyn_vars']??[] as $dk=>$dv)$vars[$dk]=$dv;
     $vars=array_merge($vars,$extraVars);
 
@@ -1434,7 +1486,13 @@ function execLinkAutomation($botId,$chatId,$u,&$db,$s,$msgText,$token){
     foreach($rules as $rule){
         if(empty($rule['enabled']))continue;
         $trigger=strtolower(trim($rule['trigger']??''));
-        if($trigger===''||$trigger!==$msgLower)continue;
+        if($trigger==='')continue;
+        $tMode=$rule['trigger_mode']??'exact';
+        $matched=false;
+        if($tMode==='startswith') $matched=str_starts_with($msgLower,$trigger);
+        elseif($tMode==='contains') $matched=(str_contains($msgLower,$trigger));
+        else $matched=($trigger===$msgLower);
+        if(!$matched)continue;
         if(!empty($rule['access_control'])&&!hasAccess($u['id']??'',$chatId,$rule['access_control'],$s['global_vars']??''))continue;
         // Browser mode: delegate to browser executor with captcha support
         if(!empty($rule['use_browser'])){
@@ -4204,11 +4262,12 @@ if($page==='api'){
                     'body'=>trim($rule['body']??''),
                     'response_path'=>trim($rule['response_path']??''),
                     'trigger'=>strtolower(trim($rule['trigger']??'')),
+                    'trigger_mode'=>in_array($rule['trigger_mode']??'exact',['exact','startswith','contains'])?$rule['trigger_mode']:'exact',
                     'reply_template'=>trim($rule['reply_template']??'{response}'),
                     'error_message'=>trim($rule['error_message']??'⚠️ Error fetching link response.'),
                     'enabled'=>(bool)($rule['enabled']??true),
                     'access_control'=>trim($rule['access_control']??''),
-                    'timeout'=>max(5,min(120,(int)($rule['timeout']??30))),
+                    'timeout'=>max(5,min(300,(int)($rule['timeout']??60))),
                     'use_browser'=>$usesBrowser,
                     'browser_steps'=>$browserSteps,
                     'browser_result_var'=>trim($rule['browser_result_var']??'result'),
@@ -8794,11 +8853,16 @@ function laAddRule(){
     body: '',
     response_path: '',
     trigger: '',
+    trigger_mode: 'exact',
     reply_template: '🔗 Response:\n{response}',
     error_message: '⚠️ Error fetching response.',
     enabled: true,
     access_control: '',
-    timeout: 30,
+    timeout: 60,
+    use_browser: false,
+    browser_steps: [],
+    browser_result_var: 'result',
+    captcha_prompt: '🔐 Captcha solve karke reply karo:',
     form_capture: false,
     fc_submit_url: '',
     fc_fields: '',
@@ -8806,6 +8870,56 @@ function laAddRule(){
     fc_headers: '',
   });
   laRenderRules();
+}
+
+function laApplyUidaiTemplate(tpl, bsContId){
+  const container = g(bsContId);
+  if(!container) return;
+  container.innerHTML = '';
+  const steps = {
+    verify: [
+      {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
+      {type:'open', value:'https://myaadhaar.uidai.gov.in/verifyAadhaar', stop_on_error:true},
+      {type:'wait_load', value:'networkidle', timeout:'20'},
+      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
+      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
+      {type:'screenshot', caption:'Aadhaar number filled', crop_x:'', crop_y:'', crop_w:'', crop_h:'', send_ss:false, delete_after:false},
+      {type:'ask_captcha', caption:'🔐 Neeche security code dikhta hai, woh reply karo:', crop_x:'300', crop_y:'280', crop_w:'400', crop_h:'120', var_name:'captcha'},
+      {type:'fill', selector:'input[formcontrolname="securityCode"], input[placeholder*="security code"], input[placeholder*="Security Code"], #captcha, input[name="captcha"]', value:'{captcha}'},
+      {type:'click', selector:'button[type="submit"], button.submit-btn, .verify-btn, .btn-verify, .btn-primary', stop_on_error:false},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'screenshot', caption:'Verification result', send_ss:true, delete_after:false},
+      {type:'get_text', selector:'.verification-status, .result-msg, .success-message, mat-card, .ng-star-inserted h2, .alert, mat-dialog-content', var_name:'result'},
+    ],
+    status: [
+      {type:'set_var', var_name:'enrolment_id', value:'{query_arg}'},
+      {type:'open', value:'https://myaadhaar.uidai.gov.in/CheckAadhaarStatus', stop_on_error:true},
+      {type:'wait_load', value:'networkidle', timeout:'20'},
+      {type:'wait_element', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', timeout:'20'},
+      {type:'fill', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', value:'{enrolment_id}'},
+      {type:'ask_captcha', caption:'🔐 Security code reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
+      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[placeholder*="Security"], #captcha, input[name="captcha"]', value:'{captcha}'},
+      {type:'click', selector:'button[type="submit"], .submit-btn, .check-status-btn, .btn-primary'},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'screenshot', caption:'Status result', send_ss:true, delete_after:false},
+      {type:'get_text', selector:'.status-result, .result-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
+    ],
+    lock: [
+      {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
+      {type:'open', value:'https://myaadhaar.uidai.gov.in/lock-unlock-uid', stop_on_error:true},
+      {type:'wait_load', value:'networkidle', timeout:'20'},
+      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
+      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
+      {type:'ask_captcha', caption:'🔐 Security captcha reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
+      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[name="captcha"], #captcha', value:'{captcha}'},
+      {type:'click', selector:'button[type="submit"], .btn-primary, .send-otp-btn'},
+      {type:'wait_load', value:'networkidle', timeout:'20'},
+      {type:'screenshot', caption:'OTP sent screen', send_ss:true, delete_after:false},
+      {type:'get_text', selector:'.otp-msg, .info-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
+    ],
+  };
+  (steps[tpl]||[]).forEach(s => laAddBrowserStep(bsContId, s));
+  toast('✅ UIDAI template load ho gaya! Steps adjust karo.', 'success');
 }
 
 function laDeleteRule(idx){
@@ -8821,23 +8935,33 @@ function laUpdateRule(idx, field, value){
 // ─── LA Browser Step Helpers ─────────────────────────────────────────────────
 const LA_BS_TYPES = {
   open:{label:'🌐 Open URL',fields:[{k:'value',ph:'https://site.com',label:'URL'}]},
+  wait_load:{label:'⌚ Wait Load',fields:[{k:'value',ph:'networkidle',label:'State (networkidle/domcontentloaded/load)'},{k:'timeout',ph:'15',label:'Timeout(s)'}]},
   click:{label:'👆 Click',fields:[{k:'selector',ph:'#btn or //button',label:'Selector'},{k:'x',ph:'X (optional)',label:'X'},{k:'y',ph:'Y (optional)',label:'Y'}]},
   fill:{label:'⌨️ Fill Input',fields:[{k:'selector',ph:'#email',label:'Selector'},{k:'value',ph:'{query} or text',label:'Value'}]},
+  type_slow:{label:'⌨️ Type Slow',fields:[{k:'selector',ph:'#aadhaar-input',label:'Selector'},{k:'value',ph:'{query}',label:'Text'},{k:'delay_ms',ph:'80',label:'Delay(ms)'}]},
   screenshot:{label:'📸 Screenshot',fields:[{k:'caption',ph:'Result',label:'Caption'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'}],checks:[{k:'send_ss',label:'Send to user'},{k:'delete_after',label:'Del after'}]},
   ask_captcha:{label:'🔐 Ask Captcha (relay to bot)',fields:[{k:'caption',ph:'🔐 Reply with captcha:',label:'Prompt'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'},{k:'var_name',ph:'captcha',label:'Reply→var'}]},
   wait:{label:'⏱ Wait',fields:[{k:'value',ph:'2',label:'Secs'}]},
   wait_element:{label:'⌛ Wait Elem',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'timeout',ph:'10',label:'Timeout(s)'}]},
+  wait_url:{label:'⌛ Wait URL',fields:[{k:'value',ph:'dashboard',label:'URL contains'},{k:'timeout',ph:'15',label:'Timeout(s)'}]},
   get_text:{label:'📋 Get Text→Var',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'var_name',ph:'result',label:'Save as'}]},
+  get_attr:{label:'🔗 Get Attr→Var',fields:[{k:'selector',ph:'a.link',label:'Selector'},{k:'attribute',ph:'href',label:'Attribute'},{k:'var_name',ph:'result',label:'Save as'}]},
   js_eval:{label:'⚡ JS Eval→Var',fields:[{k:'value',ph:'document.title',label:'JS'},{k:'var_name',ph:'js_result',label:'Save as'}]},
   scroll:{label:'↕️ Scroll',fields:[{k:'value',ph:'500',label:'Pixels'}]},
   reload:{label:'🔄 Reload',fields:[]},
   set_var:{label:'📦 Set Var',fields:[{k:'var_name',ph:'myvar',label:'Var name'},{k:'value',ph:'fixed or {other}',label:'Value'}]},
   key:{label:'⌨️ Key Press',fields:[{k:'value',ph:'Enter Tab Escape',label:'Key'}]},
   select:{label:'📋 Select Option',fields:[{k:'selector',ph:'select#lang',label:'Selector'},{k:'value',ph:'English',label:'Option'}]},
+  hover:{label:'🖱 Hover',fields:[{k:'selector',ph:'#menu',label:'Selector'}]},
+  double_click:{label:'👆👆 Double Click',fields:[{k:'selector',ph:'#item',label:'Selector'}]},
+  clear_field:{label:'🗑 Clear Field',fields:[{k:'selector',ph:'#input',label:'Selector'}]},
   cookie_set:{label:'🍪 Set Cookie',fields:[{k:'name',ph:'session',label:'Name'},{k:'value',ph:'{token}',label:'Value'}]},
   cookie_get:{label:'🍪 Get Cookie→Var',fields:[{k:'name',ph:'auth_token',label:'Name'},{k:'var_name',ph:'cookie_val',label:'Save as'}]},
   iframe_switch:{label:'🖼 IFrame In',fields:[{k:'selector',ph:'iframe#frame1',label:'Selector'}]},
   iframe_main:{label:'🖼 IFrame Out',fields:[]},
+  assert_text:{label:'✅ Assert Text',fields:[{k:'selector',ph:'#status',label:'Selector'},{k:'value',ph:'Success',label:'Expected text'}]},
+  upload_file:{label:'📁 Upload File',fields:[{k:'selector',ph:'input[type=file]',label:'Selector'},{k:'value',ph:'/path/to/file',label:'File path'}]},
+  drag_drop:{label:'↔️ Drag & Drop',fields:[{k:'selector',ph:'#draggable',label:'Source'},{k:'target',ph:'#target',label:'Target'}]},
   raw:{label:'⚡ Raw Python',fields:[{k:'value',ph:'PAGE.evaluate("return document.title")',label:'Python code'}]},
 };
 
@@ -8930,8 +9054,14 @@ function laRenderRules(){
             '<input type="text" class="fi" value="'+safe(rule.label)+'" placeholder="My Rule" oninput="laUpdateRule('+idx+',\'label\',this.value);this.closest(\'[style*=overflow]\').querySelector(\'span[style*=font-weight]\').textContent=this.value||\'Rule '+(idx+1)+'\'">' +
           '</div>' +
           '<div class="fgrp">' +
-            '<label class="fl" style="color:var(--y)">&#9889; Trigger Keyword <span style="font-weight:normal;color:var(--td)">(user exactly yahi type kare)</span></label>' +
-            '<input type="text" class="fi" value="'+safe(rule.trigger)+'" placeholder="price / weather / status" oninput="laUpdateRule('+idx+',\'trigger\',this.value);this.closest(\'[style*=overflow]\').querySelectorAll(\'span\')[1].textContent=\'trigger: \'+(this.value||\'(empty)\')" style="color:var(--y);border-color:rgba(255,214,10,.4)">' +
+            '<label class="fl" style="color:var(--y)">&#9889; Trigger Keyword <span style="font-weight:normal;color:var(--td)">(user yahi type kare)</span></label>' +
+            '<input type="text" class="fi" value="'+safe(rule.trigger)+'" placeholder="aadhaar / verify / status" oninput="laUpdateRule('+idx+',\'trigger\',this.value);this.closest(\'[style*=overflow]\').querySelectorAll(\'span\')[1].textContent=\'trigger: \'+(this.value||\'(empty)\')" style="color:var(--y);border-color:rgba(255,214,10,.4)">' +
+          '</div>' +
+          '<div class="fgrp" style="flex:0.7;min-width:130px">' +
+            '<label class="fl">Trigger Mode</label>' +
+            '<select class="fsel" onchange="laUpdateRule('+idx+',\'trigger_mode\',this.value)">' +
+              ['exact','startswith','contains'].map(m=>'<option value="'+m+'"'+((rule.trigger_mode||'exact')===m?' selected':'')+'>'+m+'</option>').join('') +
+            '</select>' +
           '</div>' +
         '</div>' +
         // URL + Method row (simple curl mode)
@@ -8980,6 +9110,12 @@ function laRenderRules(){
           '</div>' +
           '<div id="la-browser-section-'+idx+'" style="display:'+(useBrowser?'block':'none')+';margin-top:8px">' +
             '<div style="font-size:9px;color:var(--td);margin-bottom:6px">Browser steps (open, click, fill...). Blank = URL se direct open.</div>' +
+            '<div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px">' +
+              '<span style="font-size:9px;color:var(--p);font-family:\'Share Tech Mono\';align-self:center">UIDAI Templates:</span>' +
+              '<button class="btn bsm" style="background:rgba(255,159,10,.15);border:1px solid rgba(255,159,10,.4);color:var(--o);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'verify\',\''+bsContId+'\')">🆔 Verify Aadhaar</button>' +
+              '<button class="btn bsm" style="background:rgba(57,255,20,.1);border:1px solid rgba(57,255,20,.3);color:var(--g);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'status\',\''+bsContId+'\')">📋 Aadhaar Status</button>' +
+              '<button class="btn bsm" style="background:rgba(0,245,255,.1);border:1px solid rgba(0,245,255,.3);color:var(--c);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'lock\',\''+bsContId+'\')">🔒 Lock/Unlock UID</button>' +
+            '</div>' +
             '<div id="'+bsContId+'" style="margin-bottom:6px"></div>' +
             '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">' +
               Object.entries(LA_BS_TYPES).map(([k,v])=>'<button class="btn bg bsm" onclick="laAddBrowserStep(\''+bsContId+'\',{type:\''+k+'\'})" style="font-size:10px;padding:2px 6px">'+v.label+'</button>').join('') +
