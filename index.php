@@ -3,17 +3,78 @@
 if (!function_exists('str_starts_with')) { function str_starts_with($h,$n){return(string)$n!==''&&strncmp($h,$n,strlen($n))===0;} }
 if (!function_exists('str_ends_with'))   { function str_ends_with($h,$n){return $n!==''&&substr($h,-strlen($n))===(string)$n;} }
 function isAssoc($a){if(!is_array($a)||empty($a))return false;return array_keys($a)!==range(0,count($a)-1);}
+
+// ─── Security Headers ───────────────────────────────────────────────────────
+header('X-Frame-Options: SAMEORIGIN');
+header('X-Content-Type-Options: nosniff');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+header("Permissions-Policy: camera=(), microphone=(), geolocation=()");
+
+// ─── Configuration ──────────────────────────────────────────────────────────
 define('ADMIN_USER','admin');
-define('ADMIN_PASS','rebel123');
+// bcrypt hash of the admin password — priority: .admin_hash file > REBEL_ADMIN_HASH env > built-in default
+// Default password: rebel@SecureAdmin#2026  — CHANGE THIS before production!
+$_aHashFile=__DIR__.'/.admin_hash';
+$_aHashDefault='$2y$12$QF5M3n7mZHFOuBDhRSWRj.VkbV9rI5LNTDEqKEg8B2eYRbfuvPL5O';
+$_aHash=file_exists($_aHashFile)?trim(file_get_contents($_aHashFile)):(getenv('REBEL_ADMIN_HASH')?:$_aHashDefault);
+define('ADMIN_PASS_HASH', $_aHash);
+// Plain-text fallback for env-based override (set REBEL_ADMIN_PASS env var)
+define('ADMIN_PASS_ENV', getenv('REBEL_ADMIN_PASS') ?: '');
 define('BOTS_DIR',__DIR__.'/bots/');
 define('MASTER_FILE',__DIR__.'/rebel_bots.json');
 define('TG_BASE','https://api.telegram.org/bot');
 define('TG_TO',20);
-if(!is_dir(BOTS_DIR))@mkdir(BOTS_DIR,0777,true);
+define('RATE_LIMIT_FILE',__DIR__.'/.rate_limits.json');
+define('CSRF_TOKEN_NAME','_csrf');
+if(!is_dir(BOTS_DIR))@mkdir(BOTS_DIR,0755,true);
+
+// ─── Login Rate Limiting (brute-force protection) ───────────────────────────
+function getRateLimits(){
+    if(!file_exists(RATE_LIMIT_FILE))return[];
+    $d=json_decode(file_get_contents(RATE_LIMIT_FILE),true);
+    return is_array($d)?$d:[];
+}
+function saveRateLimits($d){file_put_contents(RATE_LIMIT_FILE,json_encode($d),LOCK_EX);}
+function isLoginRateLimited($ip){
+    $rl=getRateLimits();$now=time();$k='login_'.$ip;
+    $e=$rl[$k]??['count'=>0,'until'=>0,'last'=>0];
+    return ($e['until']>$now);
+}
+function recordLoginFail($ip){
+    $rl=getRateLimits();$now=time();$k='login_'.$ip;
+    $e=$rl[$k]??['count'=>0,'until'=>0,'last'=>$now];
+    $e['count']++;$e['last']=$now;
+    if($e['count']>=5)$e['until']=$now+300; // 5 min ban after 5 fails
+    $rl[$k]=$e;saveRateLimits($rl);
+}
+function clearLoginFails($ip){$rl=getRateLimits();unset($rl['login_'.$ip]);saveRateLimits($rl);}
+function getLoginLockedSecs($ip){
+    $rl=getRateLimits();$now=time();$e=$rl['login_'.$ip]??['until'=>0];
+    return max(0,$e['until']-$now);
+}
+
+// ─── Password verification ──────────────────────────────────────────────────
+function verifyAdminPassword($pass){
+    if(ADMIN_PASS_ENV!==''&&hash_equals(ADMIN_PASS_ENV,$pass))return true;
+    return password_verify($pass,ADMIN_PASS_HASH);
+}
+
+// ─── CSRF helpers ───────────────────────────────────────────────────────────
+function csrfToken(){
+    if(empty($_SESSION[CSRF_TOKEN_NAME])){
+        $_SESSION[CSRF_TOKEN_NAME]=bin2hex(random_bytes(32));
+    }
+    return $_SESSION[CSRF_TOKEN_NAME];
+}
+function verifyCsrf(){
+    $tok=$_POST[CSRF_TOKEN_NAME]??($_SERVER['HTTP_X_CSRF_TOKEN']??'');
+    return isset($_SESSION[CSRF_TOKEN_NAME])&&hash_equals($_SESSION[CSRF_TOKEN_NAME],$tok);
+}
 
 function loadBots(){return file_exists(MASTER_FILE)?(json_decode(file_get_contents(MASTER_FILE),true)?:[]):[];}
 function saveBots($b){file_put_contents(MASTER_FILE,json_encode($b,JSON_PRETTY_PRINT),LOCK_EX);}
-function getBotDir($id){$d=BOTS_DIR.preg_replace('/[^a-zA-Z0-9_]/','_',$id).'/';if(!is_dir($d)){@mkdir($d,0777,true);@mkdir($d.'uploads/',0777,true);}return $d;}
+function getBotDir($id){$d=BOTS_DIR.preg_replace('/[^a-zA-Z0-9_]/','_',$id).'/';if(!is_dir($d)){@mkdir($d,0755,true);@mkdir($d.'uploads/',0755,true);}return $d;}
 function loadDB($id){
     $f=getBotDir($id).'data.json';
     $def=['users'=>[],'ukeys'=>[],'lkeys'=>[],'stats'=>['searches'=>0,'cmds'=>0],
@@ -117,7 +178,7 @@ function dynVarGet(&$db,$key){
 function tg($method,$params=[],$token=''){
     if(!$token)return['ok'=>false];
     $ch=curl_init();
-    $o=[CURLOPT_URL=>TG_BASE.$token.'/'.$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>TG_TO,CURLOPT_SSL_VERIFYPEER=>false];
+    $o=[CURLOPT_URL=>TG_BASE.$token.'/'.$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>TG_TO,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2];
     if($params){$o[CURLOPT_POST]=true;$o[CURLOPT_POSTFIELDS]=json_encode($params);$o[CURLOPT_HTTPHEADER]=['Content-Type: application/json'];}
     curl_setopt_array($ch,$o);$r=curl_exec($ch);curl_close($ch);return json_decode($r,true)?:[];
 }
@@ -430,7 +491,7 @@ function sendLong($botId,$chatId,$msgId,$text,$media,$kb,$edit,$token,$page=0){
     return sendMsg($chatId,$msgId,$cur,$page===0?$media:'',$fkb,$edit,$token);
 }
 
-function doCurl($url,$method,$headersStr,$body,$timeout=120){
+function doCurl($url,$method,$headersStr,$body,$timeout=120,$sslVerify=true){
     $hdrs=[];
     foreach(explode("\n",$headersStr) as $h){
         $h=trim($h);
@@ -440,8 +501,8 @@ function doCurl($url,$method,$headersStr,$body,$timeout=120){
     $o=[
         CURLOPT_URL=>$url,
         CURLOPT_RETURNTRANSFER=>true,
-        CURLOPT_SSL_VERIFYPEER=>false,
-        CURLOPT_SSL_VERIFYHOST=>false,
+        CURLOPT_SSL_VERIFYPEER=>$sslVerify,
+        CURLOPT_SSL_VERIFYHOST=>$sslVerify?2:0,
         CURLOPT_TIMEOUT=>$timeout,
         CURLOPT_CONNECTTIMEOUT=>30,
         CURLOPT_FOLLOWLOCATION=>true,
@@ -840,6 +901,78 @@ for i,st in enumerate(steps):
             V[vn]=random.choice(pts) if pts else ''
         elif t=='raw':
             exec(av(st.get('value','')),{'P':P,'PAGE':P,'B':B,'BROWSER':B,'V':V,'av':av,'ss':ss,'R':R})
+        elif t=='get_attr':
+            s=av(st.get('selector',''));attr=av(st.get('attribute','href'));vn=st.get('var_name','result')
+            val=P.locator(s).first.get_attribute(attr) if PW else fel(s).get_attribute(attr)
+            V[vn]=val or '';R['steps'].append({'i':i,'type':t,'status':'ok','value':val});continue
+        elif t=='js_eval':
+            code=av(st.get('value',''));vn=st.get('var_name','js_result')
+            val=P.evaluate(code) if PW else B.execute_script('return '+code)
+            V[vn]=str(val) if val is not None else '';R['steps'].append({'i':i,'type':t,'status':'ok','value':str(val)});continue
+        elif t=='assert_text':
+            s=av(st.get('selector',''));expected=av(st.get('value',''))
+            actual=P.locator(s).first.inner_text() if PW else fel(s).text
+            if expected.lower() not in actual.lower(): raise Exception(f'Assert failed: expected "{expected}" in "{actual}"')
+        elif t=='upload_file':
+            s=av(st.get('selector',''));path=av(st.get('value',''))
+            if PW: P.set_input_files(s,path)
+            else: fel(s).send_keys(path)
+        elif t=='iframe_switch':
+            s=av(st.get('selector',''))
+            if PW: P.frame_locator(s).locator('body').wait_for(timeout=5000)
+            else:
+                iframe=fel(s);B.switch_to.frame(iframe)
+        elif t=='iframe_main':
+            if not PW: B.switch_to.default_content()
+        elif t=='cookie_set':
+            name=av(st.get('name',''));val2=av(st.get('value',''))
+            if PW: P.context.add_cookies([{'name':name,'value':val2,'url':curl()}])
+            else: B.add_cookie({'name':name,'value':val2})
+        elif t=='cookie_get':
+            name=av(st.get('name',''));vn=st.get('var_name','cookie_val')
+            if PW:
+                cks=P.context.cookies();match=[c['value'] for c in cks if c['name']==name]
+                V[vn]=match[0] if match else ''
+            else:
+                cks=B.get_cookies();match=[c['value'] for c in cks if c['name']==name]
+                V[vn]=match[0] if match else ''
+            R['steps'].append({'i':i,'type':t,'status':'ok','value':V[vn]});continue
+        elif t=='type_slow':
+            s=av(st.get('selector',''));txt=av(st.get('value',''));delay=float(st.get('delay_ms',50))/1000
+            if PW: P.type(s,txt,delay=float(st.get('delay_ms',50)))
+            else:
+                el=fel(s);el.clear()
+                for ch in txt: el.send_keys(ch);time.sleep(delay)
+        elif t=='wait_url':
+            expected=av(st.get('value',''));timeout=float(st.get('timeout',10))
+            if PW: P.wait_for_url(f'**{expected}**',timeout=int(timeout*1000))
+            else:
+                import time as _t;start=_t.time()
+                while expected not in B.current_url:
+                    if _t.time()-start>timeout: raise Exception('URL wait timeout: '+expected)
+                    _t.sleep(0.5)
+        elif t=='clear_field':
+            s=av(st.get('selector',''))
+            if PW: P.fill(s,'')
+            else: el=fel(s);el.clear()
+        elif t=='double_click':
+            s=av(st.get('selector',''))
+            if PW: P.dblclick(s)
+            else:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(B).double_click(fel(s)).perform()
+        elif t=='right_click':
+            s=av(st.get('selector',''))
+            if PW: P.click(s,button='right')
+            else:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(B).context_click(fel(s)).perform()
+        elif t=='drag_drop':
+            src=av(st.get('selector',''));tgt=av(st.get('target',''))
+            if PW: P.drag_and_drop(src,tgt)
+            else:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(B).drag_and_drop(fel(src),fel(tgt)).perform()
         R['steps'].append({'i':i,'type':t,'status':'ok'})
     except Exception as e:
         R['steps'].append({'i':i,'type':t,'status':'error','error':str(e)})
@@ -912,7 +1045,7 @@ function execBrowser($botId,$chatId,$msgId,$u,&$db,$s,$query,$p,$token,$extraVar
             $tmp=tempnam(sys_get_temp_dir(),'cap_').'.png';
             file_put_contents($tmp,base64_decode($b64));
             $ch=curl_init();
-            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>false,
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
                 CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
             curl_exec($ch);curl_close($ch);@unlink($tmp);
         }else{
@@ -928,7 +1061,7 @@ function execBrowser($botId,$chatId,$msgId,$u,&$db,$s,$query,$p,$token,$extraVar
             file_put_contents($tmp,base64_decode($step['image']));
             $cap=htmlspecialchars($step['caption']??'',ENT_NOQUOTES,'UTF-8');
             $ch=curl_init();
-            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>false,
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
                 CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$cap,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','ss.png')]]);
             $sr=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($tmp);
             if(!empty($step['delete_after'])&&!empty($sr['result']['message_id'])){
@@ -993,7 +1126,8 @@ function execPage($botId,$chatId,$msgId,$u,&$db,$s,$query,$p,$token){
         $timeout=!empty($p['api_timeout'])?(int)$p['api_timeout']:15;
         $maxR=!empty($p['api_retry'])?2:1;$attempt=0;$apiData=null;
         while($attempt<$maxR){
-            $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$apiUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_TIMEOUT=>$timeout]);
+            // User-configured API URL — SSL verify enabled; set to false only if hitting self-signed certs
+            $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$apiUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>$timeout]);
             $res=curl_exec($ch);curl_close($ch);
             if($res){$td=json_decode($res,true);if(is_array($td)){$apiData=$td;break;}}
             $attempt++;if($attempt<$maxR)sleep(1);
@@ -1181,6 +1315,12 @@ if(isset($_GET['webhook_bot'])){
     $bots=loadBots();$token='';$curBot=null;
     foreach($bots as $b){if($b['id']===$botId){$curBot=$b;$token=$b['token'];break;}}
     if(!$token||!$curBot){http_response_code(200);exit;}
+    // Verify Telegram webhook secret token if configured
+    $wSecret=$curBot['webhook_secret']??'';
+    if($wSecret!==''){
+        $sentSecret=$_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN']??'';
+        if(!hash_equals($wSecret,$sentSecret)){http_response_code(403);exit;}
+    }
     $update=json_decode(file_get_contents('php://input'),true);
     if(!is_array($update)){http_response_code(200);exit;}
     $db=loadDB($botId);$s=$db['settings'];
@@ -1608,7 +1748,7 @@ if(isset($_GET['webhook_bot'])){
                 }
                 $dlUrl = 'https://api.telegram.org/file/bot'.$token.'/'.$filePath;
                 $ch = curl_init($dlUrl);
-                curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_TIMEOUT=>120,CURLOPT_FOLLOWLOCATION=>true]);
+                curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>120,CURLOPT_FOLLOWLOCATION=>true]);
                 $fileData = curl_exec($ch);
                 curl_close($ch);
                 if(!$fileData){
@@ -1634,7 +1774,8 @@ if(isset($_GET['webhook_bot'])){
                     CURLOPT_URL            => TG_BASE.$token.'/sendDocument',
                     CURLOPT_RETURNTRANSFER => true,
                     CURLOPT_POST           => true,
-                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYPEER => true,
+                    CURLOPT_SSL_VERIFYHOST => 2,
                     CURLOPT_TIMEOUT        => 120,
                     CURLOPT_POSTFIELDS     => [
                         'chat_id'    => $chatId,
@@ -3075,13 +3216,30 @@ $page=san($_GET['page']??'panel');
 $action=preg_replace('/[^a-zA-Z0-9_]/','',($_POST['action']??$_GET['action']??''));
 if($page==='login'){
     if($_SERVER['REQUEST_METHOD']==='POST'){
-        if(($_POST['user']??'')==ADMIN_USER&&($_POST['pass']??'')==ADMIN_PASS){$_SESSION['rebel_ok']=true;header('Location: ?page=panel');exit;}
-        $loginErr='Wrong credentials!';
+        $clientIp=$_SERVER['HTTP_CF_CONNECTING_IP']??$_SERVER['HTTP_X_REAL_IP']??$_SERVER['REMOTE_ADDR']??'unknown';
+        $lockedSecs=getLoginLockedSecs($clientIp);
+        if(isLoginRateLimited($clientIp)){
+            $loginErr='Too many failed attempts. Try again in '.ceil($lockedSecs/60).' min.';
+        }elseif(!verifyCsrf()){
+            $loginErr='Invalid security token. Please refresh and try again.';
+        }elseif(($_POST['user']??'')===ADMIN_USER&&verifyAdminPassword($_POST['pass']??'')){
+            clearLoginFails($clientIp);
+            session_regenerate_id(true);
+            $_SESSION['rebel_ok']=true;
+            header('Location: ?page=panel');exit;
+        }else{
+            recordLoginFail($clientIp);
+            $loginErr='Wrong credentials!';
+        }
     }
     goto RENDER;
 }
-if($page==='logout'){session_destroy();header('Location: ?page=login');exit;}
+if($page==='logout'){session_unset();session_destroy();header('Location: ?page=login');exit;}
 if(empty($_SESSION['rebel_ok'])){header('Location: ?page=login');exit;}
+// CSRF guard for all admin POST API calls (JSON body carries token via header)
+if($page==='api'&&$_SERVER['REQUEST_METHOD']==='POST'&&!verifyCsrf()){
+    jout(['ok'=>false,'error'=>'CSRF validation failed. Please reload the page.']);
+}
 
 if($page==='api'){
     $bots=loadBots();$body=json_decode(file_get_contents('php://input'),true)??[];
@@ -3124,7 +3282,21 @@ if($page==='api'){
             if(!$TOK)jout(['ok'=>false,'error'=>'No bot']);
             $pr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';
             $url=$pr.$_SERVER['HTTP_HOST'].explode('?',$_SERVER['REQUEST_URI'])[0].'?webhook_bot='.$actId;
-            $r=tg('setWebhook',['url'=>$url],$TOK);addLog($actId,'Engine Started','success');jout(['ok'=>$r['ok']??false]);break;
+            // Generate or reuse webhook secret token for this bot
+            $wSecret='';
+            foreach($bots as $bk=>$bv){
+                if($bv['id']===$actId){
+                    if(empty($bv['webhook_secret'])){
+                        $wSecret=bin2hex(random_bytes(32));
+                        $bots[$bk]['webhook_secret']=$wSecret;
+                        saveBots($bots);
+                    }else{$wSecret=$bv['webhook_secret'];}
+                    break;
+                }
+            }
+            $whParams=['url'=>$url,'allowed_updates'=>['message','callback_query','inline_query','chosen_inline_result']];
+            if($wSecret)$whParams['secret_token']=$wSecret;
+            $r=tg('setWebhook',$whParams,$TOK);addLog($actId,'Engine Started','success');jout(['ok'=>$r['ok']??false]);break;
         case 'stop_bot':tg('deleteWebhook',[],$TOK);addLog($actId,'Engine Stopped','warn');jout(['ok'=>true]);break;
         case 'get_stats':
             jout(['ok'=>true,'data'=>['users'=>count($db['users']),'searches'=>$db['stats']['searches']??0,'cmds'=>$db['stats']['cmds']??0,'keys'=>count($db['ukeys'])+count($db['lkeys'])]]);break;
@@ -3141,6 +3313,14 @@ if($page==='api'){
             for($i=0;$i<$qty;$i++){$ch='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';$k='';for($j=0;$j<15;$j++)$k.=$ch[random_int(0,strlen($ch)-1)];$k=$type.'-'.chunk_split($k,5,'-').date('y');$kg[]=$k;$obj=['id'=>uniqid('k_'),'key'=>$k,'tier'=>$tier,'searches'=>$srch,'days'=>$days,'status'=>'unused','created'=>date('Y-m-d')];if($type==='LIC')$db['lkeys'][]=$obj;else $db['ukeys'][]=$obj;}
             saveDB($actId,$db);jout(['ok'=>true,'keys'=>$kg]);break;
         case 'get_settings':jout(['ok'=>true,'data'=>['settings'=>$db['settings']]]);break;
+        case 'change_admin_pass':
+            $cur=$body['current']??'';$new=$body['new']??'';
+            if(!verifyAdminPassword($cur))jout(['ok'=>false,'error'=>'Current password wrong']);
+            if(strlen($new)<8)jout(['ok'=>false,'error'=>'New password must be at least 8 characters']);
+            $hash=password_hash($new,PASSWORD_BCRYPT,['cost'=>12]);
+            $cf=__DIR__.'/.admin_hash';file_put_contents($cf,$hash,LOCK_EX);chmod($cf,0600);
+            // Also update env override for this process (ephemeral, but hash file persists)
+            jout(['ok'=>true,'hash'=>$hash,'note'=>'Hash saved. Set REBEL_ADMIN_HASH env var or update ADMIN_PASS_HASH in code.']);break;
         case 'save_settings':$db['settings']=array_merge($db['settings'],$body['settings']??[]);saveDB($actId,$db);jout(['ok'=>true]);break;
 
         case 'get_force_join':
@@ -3792,9 +3972,9 @@ td{padding:9px 11px;vertical-align:middle;}
   <h1 style="font-family:Orbitron;color:var(--c);margin-bottom:4px;font-size:20px">REBEL ADMIN</h1>
 
   <div style="font-size:11px;color:var(--td);font-family:'Share Tech Mono';margin-bottom:22px">v7.1 Fixed</div>
-  <?php if(!empty($loginErr)):?><div style="color:var(--r);font-size:12px;margin-bottom:10px;padding:8px;background:rgba(255,45,85,.1);border-radius:6px"><?=$loginErr?></div><?php endif?>
+  <?php if(!empty($loginErr)):?><div style="color:var(--r);font-size:12px;margin-bottom:10px;padding:8px;background:rgba(255,45,85,.1);border-radius:6px"><?=htmlspecialchars($loginErr,ENT_QUOTES,'UTF-8')?></div><?php endif?>
   <form method="POST">
-
+    <input type="hidden" name="<?=CSRF_TOKEN_NAME?>" value="<?=csrfToken()?>">
     <div class="fgrp" style="margin-bottom:9px"><input type="text" class="fi" name="user" placeholder="Username" required autocomplete="username"></div>
 
     <div class="fgrp" style="margin-bottom:16px"><input type="password" class="fi" name="pass" placeholder="Password" required></div>
@@ -3819,7 +3999,7 @@ td{padding:9px 11px;vertical-align:middle;}
   <nav style="flex:1">
     <button class="ni active" onclick="nav('dash',this)">📊 Dashboard</button>
     <button class="ni" onclick="nav('bots',this)">🤖 Manage Bots</button>
-    <button class="ni" onclick="nav('cfg',this)">⚙️ Bot Config</button>
+    <button class="ni" onclick="nav('cfg',this)">⚙️ Bot Config &amp; Security</button>
     <button class="ni" onclick="nav('fj',this)">🔒 Force Join</button>
     <button class="ni" onclick="nav('welcome',this)">👋 Welcome Message</button>
     <button class="ni" onclick="nav('tagger',this)">📣 User Tagger</button>
@@ -3891,6 +4071,22 @@ td{padding:9px 11px;vertical-align:middle;}
 
       <div class="fgrp" style="max-width:280px;margin-bottom:13px"><label class="fl">👑 Master Admin Telegram ID</label><input type="text" id="g-adminid" class="fi" placeholder="Your Telegram numeric ID"></div>
       <button class="btn bp" onclick="saveCfg()">💾 Save Config</button>
+    </div>
+
+    <!-- SECURITY SETTINGS -->
+    <div class="card" style="border-color:rgba(57,255,20,.35)">
+      <div class="sh"><div class="st" style="color:var(--g)">🔐 SECURITY — Change Admin Password</div></div>
+      <div style="font-size:11px;color:var(--td);margin-bottom:12px;line-height:1.7">
+        Password is stored as a bcrypt hash. After changing, you'll need to use the new password on next login.<br>
+        You can also set <code style="color:var(--c)">REBEL_ADMIN_PASS</code> or <code style="color:var(--c)">REBEL_ADMIN_HASH</code> environment variables.
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">Current Password</label><input type="password" id="sec-cur" class="fi" placeholder="Your current password" autocomplete="current-password"></div>
+        <div class="fgrp"><label class="fl">New Password (min 8 chars)</label><input type="password" id="sec-new" class="fi" placeholder="New secure password" autocomplete="new-password"></div>
+        <div class="fgrp"><label class="fl">Confirm New Password</label><input type="password" id="sec-cnf" class="fi" placeholder="Repeat new password" autocomplete="new-password"></div>
+      </div>
+      <button class="btn bp" onclick="changeAdminPass()" style="background:rgba(57,255,20,.2);border-color:var(--g);color:var(--g)">🔐 Update Password</button>
+      <div id="sec-result" style="margin-top:10px;font-size:12px;font-family:'Share Tech Mono'"></div>
     </div>
 
     <!-- FREE TEXT GLOBAL SETTINGS -->
@@ -5481,23 +5677,46 @@ td{padding:9px 11px;vertical-align:middle;}
 
       <div id="bsteps-c" style="display:flex;flex-direction:column;gap:6px"></div>
 
+      <div style="margin-bottom:8px">
+        <label style="font-size:10px;color:var(--y);font-family:'Share Tech Mono'">⚡ QUICK TEMPLATES:</label>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:5px">
+          <button class="btn bsm" style="background:rgba(0,245,255,.1);border:1px solid rgba(0,245,255,.3);font-size:10px" onclick="addAutomationTemplate('login')">🔑 Login Flow</button>
+          <button class="btn bsm" style="background:rgba(57,255,20,.1);border:1px solid rgba(57,255,20,.3);font-size:10px" onclick="addAutomationTemplate('form')">📋 Form Fill</button>
+          <button class="btn bsm" style="background:rgba(191,90,242,.1);border:1px solid rgba(191,90,242,.3);font-size:10px" onclick="addAutomationTemplate('scrape')">📊 Data Scrape</button>
+          <button class="btn bsm" style="background:rgba(255,159,10,.1);border:1px solid rgba(255,159,10,.3);font-size:10px" onclick="addAutomationTemplate('signup')">📝 Sign Up</button>
+        </div>
+      </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px">
         <button class="btn bg bsm" onclick="addBrowserStep({type:'open'})">🌐 Open URL</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'click'})">👆 Click</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'double_click'})">👆👆 Dbl Click</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'right_click'})">🖱 Right Click</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'fill'})">⌨️ Fill Input</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'type_slow'})">⌨️ Type Slow</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'clear_field'})">🗑 Clear</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'screenshot'})">📸 Screenshot</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'ask_captcha'})">🔐 Ask Captcha</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'wait'})">⏱ Wait</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'wait_element'})">⌛ Wait Elem</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'wait_url'})">⌛ Wait URL</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'scroll'})">↕️ Scroll</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'get_text'})">📋 Get Text</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'get_attr'})">🔗 Get Attr</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'js_eval'})">⚡ JS Eval</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'assert_text'})">✅ Assert</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'key'})">⌨️ Key Press</button>
-        <button class="btn bg bsm" onclick="addBrowserStep({type:'wait_element'})">⌛ Wait Elem</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'select'})">📋 Select</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'hover'})">🖱 Hover</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'drag_drop'})">↔️ Drag Drop</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'upload_file'})">📁 Upload File</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'iframe_switch'})">🖼 IFrame In</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'iframe_main'})">🖼 IFrame Out</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'cookie_set'})">🍪 Set Cookie</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'cookie_get'})">🍪 Get Cookie</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'reload'})">🔄 Reload</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'set_var'})">📦 Set Var</button>
         <button class="btn bg bsm" onclick="addBrowserStep({type:'random_var'})">🎲 Random Var</button>
-        <button class="btn bg bsm" onclick="addBrowserStep({type:'hover'})">🖱 Hover</button>
-        <button class="btn bg bsm" onclick="addBrowserStep({type:'raw'})">⚡ Raw Command</button>
+        <button class="btn bg bsm" onclick="addBrowserStep({type:'raw'})">⚡ Raw Python</button>
       </div>
     </div>
 
@@ -5659,6 +5878,7 @@ td{padding:9px 11px;vertical-align:middle;}
 
 <script>
 const A='?page=api&action=';
+const CSRF_TOKEN='<?=csrfToken()?>';
 function g(id){return document.getElementById(id);}
 function toast(m,t='info'){const d=document.createElement('div');d.className='toast '+t;d.innerHTML=`<span style="color:var(--${t==='success'?'g':t==='error'?'r':t==='warn'?'y':'c'})">● </span>${m}`;g('tc').appendChild(d);setTimeout(()=>{d.style.opacity=0;d.style.transform='translateX(20px)';setTimeout(()=>d.remove(),300);},3000);}
 function openSb(){g('sb').classList.add('open');g('sov').classList.add('open');document.body.style.overflow='hidden';}
@@ -5672,7 +5892,7 @@ function nav(id,btn){
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
 function closeModal(id){g(id).classList.remove('open');document.body.style.overflow='';}
-async function api(action,data={}){try{const r=await fetch(A+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return await r.json();}catch(e){return{ok:false,error:e.message};}}
+async function api(action,data={}){try{const r=await fetch(A+action,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':CSRF_TOKEN},body:JSON.stringify(data)});return await r.json();}catch(e){return{ok:false,error:e.message};}}
 function tup(tid){g('cut').value=tid;g('fup').click();}
 async function handleUp(inp){
   if(!inp.files||!inp.files.length)return;
@@ -5717,6 +5937,25 @@ async function saveCfg(){
   const r=await api('save_bot_config',{maintenance:g('bc-maint').checked,free_searches:parseInt(g('bc-free').value)||3});
   if(r.ok){const r2=await api('save_settings',{settings:{adminId:g('g-adminid').value}});if(r2.ok)toast('✅ Config Saved!','success');}
   else toast(r.error||'Error','error');
+}
+
+async function changeAdminPass(){
+  const cur=g('sec-cur')?.value||'';
+  const nw=g('sec-new')?.value||'';
+  const cnf=g('sec-cnf')?.value||'';
+  const res=g('sec-result');
+  if(!cur||!nw){if(res)res.innerHTML='<span style="color:var(--r)">All fields required.</span>';return;}
+  if(nw!==cnf){if(res)res.innerHTML='<span style="color:var(--r)">New passwords do not match.</span>';return;}
+  if(nw.length<8){if(res)res.innerHTML='<span style="color:var(--r)">Password must be at least 8 characters.</span>';return;}
+  const r=await api('change_admin_pass',{current:cur,new:nw});
+  if(r.ok){
+    if(res)res.innerHTML='<span style="color:var(--g)">✅ Password updated! Hash saved to server.<br>Copy this hash to REBEL_ADMIN_HASH env or code:<br><code style="word-break:break-all;font-size:10px">'+r.hash+'</code></span>';
+    g('sec-cur').value='';g('sec-new').value='';g('sec-cnf').value='';
+    toast('✅ Password changed successfully!','success');
+  }else{
+    if(res)res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Failed')+'</span>';
+    toast(r.error||'Error','error');
+  }
 }
 
 async function loadFj(){
@@ -6668,17 +6907,31 @@ async function parsePagePython(){
 const BS_TYPES={
   open:{label:'🌐 Open URL',fields:[{k:'value',ph:'https://site.com or {var1}',label:'URL'}]},
   click:{label:'👆 Click',fields:[{k:'selector',ph:'#btn or //button',label:'Selector'},{k:'x',ph:'X (optional)',label:'X'},{k:'y',ph:'Y (optional)',label:'Y'}]},
+  double_click:{label:'👆👆 Double Click',fields:[{k:'selector',ph:'#element',label:'Selector'}]},
+  right_click:{label:'🖱 Right Click',fields:[{k:'selector',ph:'#element',label:'Selector'}]},
   fill:{label:'⌨️ Fill Input',fields:[{k:'selector',ph:'#email',label:'Selector'},{k:'value',ph:'{mail} or text',label:'Value/Var'}]},
+  type_slow:{label:'⌨️ Type Slow (human)',fields:[{k:'selector',ph:'#input',label:'Selector'},{k:'value',ph:'Hello {user}',label:'Text'},{k:'delay_ms',ph:'50',label:'Delay ms/char'}]},
+  clear_field:{label:'🗑 Clear Field',fields:[{k:'selector',ph:'#input',label:'Selector'}]},
   screenshot:{label:'📸 Screenshot',fields:[{k:'caption',ph:'Result: {title}',label:'Caption'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'Width'},{k:'crop_h',ph:'H',label:'Height'}],checks:[{k:'send_ss',label:'Send to user'},{k:'delete_after',label:'Del after'}]},
   ask_captcha:{label:'🔐 Ask Captcha',fields:[{k:'caption',ph:'🔐 Reply with captcha:',label:'Prompt msg'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'Width'},{k:'crop_h',ph:'H',label:'Height'},{k:'var_name',ph:'captcha',label:'Reply→var'}]},
   wait:{label:'⏱ Wait Secs',fields:[{k:'value',ph:'2',label:'Seconds'}]},
   wait_element:{label:'⌛ Wait Elem',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'timeout',ph:'10',label:'Timeout(s)'}]},
+  wait_url:{label:'⌛ Wait URL Contains',fields:[{k:'value',ph:'/dashboard',label:'URL fragment'},{k:'timeout',ph:'10',label:'Timeout(s)'}]},
   scroll:{label:'↕️ Scroll',fields:[{k:'value',ph:'500 or -300',label:'Pixels'}]},
   reload:{label:'🔄 Reload',fields:[]},
   get_text:{label:'📋 Get Text→Var',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'var_name',ph:'result',label:'Save as'}]},
+  get_attr:{label:'🔗 Get Attribute→Var',fields:[{k:'selector',ph:'a.link',label:'Selector'},{k:'attribute',ph:'href',label:'Attribute'},{k:'var_name',ph:'link',label:'Save as'}]},
+  js_eval:{label:'⚡ JS Evaluate→Var',fields:[{k:'value',ph:'document.title',label:'JS expression'},{k:'var_name',ph:'js_result',label:'Save as'}]},
+  assert_text:{label:'✅ Assert Text',fields:[{k:'selector',ph:'#status',label:'Selector'},{k:'value',ph:'Success',label:'Expected text'}]},
   key:{label:'⌨️ Key Press',fields:[{k:'value',ph:'Enter Tab Escape',label:'Key'}]},
   select:{label:'📋 Select Option',fields:[{k:'selector',ph:'select#country',label:'Selector'},{k:'value',ph:'India or {v}',label:'Option'}]},
   hover:{label:'🖱 Hover',fields:[{k:'selector',ph:'.menu',label:'Selector'}]},
+  drag_drop:{label:'↔️ Drag & Drop',fields:[{k:'selector',ph:'#drag-source',label:'Source'},{k:'target',ph:'#drop-target',label:'Target'}]},
+  upload_file:{label:'📁 Upload File',fields:[{k:'selector',ph:'input[type=file]',label:'Selector'},{k:'value',ph:'/tmp/file.pdf or {filepath}',label:'File path'}]},
+  iframe_switch:{label:'🖼 Switch to IFrame',fields:[{k:'selector',ph:'iframe#frame1',label:'IFrame selector'}]},
+  iframe_main:{label:'🖼 Switch to Main Frame',fields:[]},
+  cookie_set:{label:'🍪 Set Cookie',fields:[{k:'name',ph:'session',label:'Cookie name'},{k:'value',ph:'{token}',label:'Cookie value'}]},
+  cookie_get:{label:'🍪 Get Cookie→Var',fields:[{k:'name',ph:'auth_token',label:'Cookie name'},{k:'var_name',ph:'cookie_val',label:'Save as'}]},
   set_var:{label:'📦 Set Var',fields:[{k:'var_name',ph:'myvar',label:'Var name'},{k:'value',ph:'fixed or {other}',label:'Value'}]},
   random_var:{label:'🎲 Random from List',fields:[{k:'var_name',ph:'proxy',label:'Var name'},{k:'value',ph:'a,b,c or {LIST}',label:'Comma list'}]},
   raw:{label:'⚡ Raw Python',fields:[{k:'value',ph:'PAGE.evaluate("return document.title")',label:'Python (PAGE=page/BROWSER=driver)'}]}
@@ -6716,6 +6969,58 @@ function getBrowserSteps(){
     steps.push(s);
   });
   return steps;
+}
+
+// Automation template presets
+const AUTOMATION_TEMPLATES={
+  login:[
+    {type:'open',value:'{LOGIN_URL}',stop_on_error:true},
+    {type:'wait_element',selector:'input[type="text"],input[type="email"],#username',timeout:'10',stop_on_error:true},
+    {type:'fill',selector:'input[type="text"],input[type="email"],#username',value:'{username}',stop_on_error:true},
+    {type:'fill',selector:'input[type="password"],#password',value:'{password}',stop_on_error:true},
+    {type:'click',selector:'button[type="submit"],input[type="submit"],.login-btn,#login',stop_on_error:true},
+    {type:'wait_url',value:'/dashboard',timeout:'15',stop_on_error:false},
+    {type:'screenshot',caption:'Login result',send_ss:true,delete_after:false}
+  ],
+  form:[
+    {type:'open',value:'{FORM_URL}',stop_on_error:true},
+    {type:'wait_element',selector:'form',timeout:'10',stop_on_error:true},
+    {type:'fill',selector:'#name,input[name="name"]',value:'{name}',stop_on_error:false},
+    {type:'fill',selector:'#email,input[name="email"]',value:'{email}',stop_on_error:false},
+    {type:'fill',selector:'#phone,input[name="phone"]',value:'{phone}',stop_on_error:false},
+    {type:'click',selector:'button[type="submit"],.submit-btn',stop_on_error:true},
+    {type:'wait',value:'2'},
+    {type:'screenshot',caption:'Form submitted ✅',send_ss:true,delete_after:false}
+  ],
+  scrape:[
+    {type:'open',value:'{PAGE_URL}',stop_on_error:true},
+    {type:'wait_element',selector:'body',timeout:'15',stop_on_error:true},
+    {type:'get_text',selector:'h1,.title,.heading',var_name:'title',stop_on_error:false},
+    {type:'get_text',selector:'.price,.amount,.value',var_name:'price',stop_on_error:false},
+    {type:'get_attr',selector:'a.primary-link,a.main-link',attribute:'href',var_name:'link',stop_on_error:false},
+    {type:'js_eval',value:'document.querySelectorAll(".item").length',var_name:'count',stop_on_error:false},
+    {type:'screenshot',caption:'📊 Page: {title}\n💰 Price: {price}\n🔗 Link: {link}\n📦 Items: {count}',send_ss:true,delete_after:false}
+  ],
+  signup:[
+    {type:'open',value:'{SIGNUP_URL}',stop_on_error:true},
+    {type:'wait_element',selector:'form',timeout:'10',stop_on_error:true},
+    {type:'fill',selector:'input[name="name"],#name,#fullname',value:'{name}',stop_on_error:false},
+    {type:'fill',selector:'input[name="email"],#email',value:'{email}',stop_on_error:false},
+    {type:'fill',selector:'input[name="password"],#password',value:'{password}',stop_on_error:false},
+    {type:'fill',selector:'input[name="password_confirm"],#confirm_password',value:'{password}',stop_on_error:false},
+    {type:'wait',value:'1'},
+    {type:'click',selector:'button[type="submit"],.register-btn,.signup-btn',stop_on_error:true},
+    {type:'wait',value:'3'},
+    {type:'screenshot',caption:'Signup result',send_ss:true,delete_after:false}
+  ]
+};
+function addAutomationTemplate(name){
+  const steps=AUTOMATION_TEMPLATES[name];
+  if(!steps)return;
+  const c=g('bsteps-c');
+  if(c&&c.children.length>0){if(!confirm('Existing steps will be replaced. Continue?'))return;c.innerHTML='';}
+  steps.forEach(s=>addBrowserStep(s));
+  toast('✅ Template loaded: '+name,'success');
 }
 
 // FORWARD LIBRARY JS
