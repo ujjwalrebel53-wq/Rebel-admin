@@ -150,6 +150,8 @@ Glad to have you here 🎉','media'=>'','buttons'=>[]];
     $defLinkAuto=['enabled'=>false,'rules'=>[]];
     if(!isset($d['settings']['link_automation']))$d['settings']['link_automation']=$defLinkAuto;
     else{foreach($defLinkAuto as $mk=>$mv){if(!array_key_exists($mk,$d['settings']['link_automation']))$d['settings']['link_automation'][$mk]=$mv;}}
+    if(!isset($d['settings']['la_bot_id']))$d['settings']['la_bot_id']='';
+    if(!isset($d['la_fc_sessions']))$d['la_fc_sessions']=[];
 
     return $d;
 }
@@ -3353,6 +3355,11 @@ if(isset($_GET['webhook_bot'])){
             }
             http_response_code(200);exit;
         }
+        // Website Form Capture: user is filling a form triggered from website
+        if(str_starts_with($activePgId,'__lafc__')){
+            handleLaFormCapture($botId,$chatId,$u,$db,$s,$msgText,$token);
+            http_response_code(200);exit;
+        }
         if($activePgId){
             $activePg=null;
             foreach($db['pages'] as $pg){if($pg['id']===$activePgId){$activePg=$pg;break;}}
@@ -3395,6 +3402,134 @@ if(isset($_GET['webhook_bot'])){
         handleFreeText($botId,$chatId,$isGroup,$uid,$u,$db,$s,$msgText,$token,$botUsername);
     }
     http_response_code(200);exit;
+}
+
+// ─── Website Form Capture Webhook ────────────────────────────────────────────
+// Endpoint: ?la_webhook={botId}
+// Website calls this with JSON: {rule_id, chat_id, fields:{name:value,...}}
+// Bot asks user for each field, collects responses, submits back to fc_submit_url
+if(isset($_GET['la_webhook'])){
+    header('Content-Type: application/json');
+    $laBotId=preg_replace('/[^a-zA-Z0-9_]/','_',$_GET['la_webhook']);
+    $allBotsLa=loadBots();$laToken='';
+    foreach($allBotsLa as $bLa){if($bLa['id']===$laBotId){$laToken=$bLa['token'];break;}}
+    if(!$laToken){echo json_encode(['ok'=>false,'error'=>'Bot not found']);exit;}
+    $laDb=loadDB($laBotId);$laS=$laDb['settings'];
+    $laInput=json_decode(file_get_contents('php://input'),true)??[];
+    $laAction=trim($laInput['action']??$_GET['la_action']??'start');
+    $laChatId=trim($laInput['chat_id']??'');
+    $laRuleId=trim($laInput['rule_id']??'');
+
+    // Find matching rule
+    $laRules=$laS['link_automation']['rules']??[];
+    $laRule=null;
+    foreach($laRules as $lr){if(($lr['id']??'')===$laRuleId){$laRule=$lr;break;}}
+    if(!$laRule||empty($laRule['form_capture'])){echo json_encode(['ok'=>false,'error'=>'Rule not found or form_capture not enabled']);exit;}
+
+    if($laAction==='start'){
+        // Website initiates a form session — bot will ask the user fields
+        if(!$laChatId){echo json_encode(['ok'=>false,'error'=>'chat_id required']);exit;}
+        // Generate session token
+        $laSessionToken=bin2hex(random_bytes(16));
+        // Parse fields definition: "field_name|Prompt\nfield2|Prompt2"
+        $laFieldDefs=[];
+        foreach(explode("\n",trim($laRule['fc_fields']??'')) as $fl){
+            $fl=trim($fl);if($fl==='')continue;
+            $laParts=explode('|',$fl,2);
+            $laFieldDefs[]=['key'=>trim($laParts[0]),'prompt'=>trim($laParts[1]??$laParts[0])];
+        }
+        if(empty($laFieldDefs)){echo json_encode(['ok'=>false,'error'=>'No fields defined in rule']);exit;}
+        // Store session in user's active_page state
+        $laUsers=$laDb['users']??[];$laUidKey=null;
+        foreach($laUsers as $luk=>$luv){if((string)($luv['id']??'')===(string)$laChatId){$laUidKey=$luk;break;}}
+        $laSession=[
+            'token'=>$laSessionToken,
+            'rule_id'=>$laRuleId,
+            'fields'=>$laFieldDefs,
+            'step'=>0,
+            'answers'=>[],
+            'submit_url'=>$laRule['fc_submit_url']??'',
+            'fc_headers'=>$laRule['fc_headers']??'',
+            'success_msg'=>$laRule['fc_success_msg']??'✅ Form submit ho gaya!',
+        ];
+        // Store session keyed by chat_id
+        if(!isset($laDb['la_fc_sessions']))$laDb['la_fc_sessions']=[];
+        $laDb['la_fc_sessions'][(string)$laChatId]=$laSession;
+        // Set user active_page to special form-capture state
+        if($laUidKey!==null){$laDb['users'][$laUidKey]['active_page']='__lafc__'.$laChatId;}
+        else{
+            // User may not exist yet — create minimal entry
+            $laDb['users'][]=['id'=>$laChatId,'name'=>'User','active_page'=>'__lafc__'.$laChatId,'searchesLeft'=>0,'searches'=>0,'banned'=>false];
+        }
+        saveDB($laBotId,$laDb);
+        // Send first prompt to user via bot
+        $firstPrompt=$laFieldDefs[0]['prompt'];
+        tg('sendMessage',['chat_id'=>$laChatId,'text'=>$firstPrompt,'parse_mode'=>'HTML'],$laToken);
+        echo json_encode(['ok'=>true,'session_token'=>$laSessionToken,'message'=>'Form session started, bot asked first field']);exit;
+    }
+
+    // status action — check if session is complete
+    if($laAction==='status'){
+        $laSessions=$laDb['la_fc_sessions']??[];
+        $laSess=$laSessions[(string)$laChatId]??null;
+        if(!$laSess){echo json_encode(['ok'=>true,'status'=>'not_found']);exit;}
+        if(isset($laSess['completed'])){echo json_encode(['ok'=>true,'status'=>'completed','answers'=>$laSess['answers']??[]]);exit;}
+        echo json_encode(['ok'=>true,'status'=>'pending','step'=>$laSess['step'],'total'=>count($laSess['fields'])]);exit;
+    }
+    echo json_encode(['ok'=>false,'error'=>'Unknown la_action']);exit;
+}
+
+// ─── Form Capture Bot Reply Handler ──────────────────────────────────────────
+// Processes __lafc__{chatId} active_page state in webhook flow
+function handleLaFormCapture($botId,$chatId,$u,&$db,$s,$msgText,$token){
+    $sessions=$db['la_fc_sessions']??[];
+    $sess=$sessions[(string)$chatId]??null;
+    if(!$sess)return false;
+    // Store answer for current step
+    $step=(int)($sess['step']??0);
+    $fields=$sess['fields']??[];
+    if(!isset($fields[$step]))return false;
+    $fieldKey=$fields[$step]['key'];
+    $sess['answers'][$fieldKey]=$msgText;
+    $sess['step']=$step+1;
+    // Next step or submit
+    if($sess['step']<count($fields)){
+        // Ask next field
+        $nextPrompt=$fields[$sess['step']]['prompt'];
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>$nextPrompt,'parse_mode'=>'HTML'],$token);
+        $db['la_fc_sessions'][(string)$chatId]=$sess;
+        saveDB($botId,$db);
+        return true;
+    }
+    // All fields collected — POST answers to submit_url
+    $submitUrl=trim($sess['submit_url']??'');
+    $submitOk=false;
+    if($submitUrl!==''){
+        $postData=array_merge($sess['answers'],['chat_id'=>$chatId,'la_session_token'=>$sess['token']??'']);
+        $postJson=json_encode($postData,JSON_UNESCAPED_UNICODE);
+        $fcHeaders='Content-Type: application/json';
+        if(!empty($sess['fc_headers'])){
+            $fcHeaders.="\n".$sess['fc_headers'];
+        }
+        $curlResult=doCurl($submitUrl,'POST',$fcHeaders,$postJson,30);
+        $submitOk=($curlResult['code']>=200&&$curlResult['code']<300);
+    }
+    // Send success message to user
+    $successMsg=$sess['success_msg']??'✅ Form submit ho gaya!';
+    tg('sendMessage',['chat_id'=>$chatId,'text'=>$successMsg,'parse_mode'=>'HTML'],$token);
+    // Mark session completed and clear user's active_page
+    $sess['completed']=true;
+    $db['la_fc_sessions'][(string)$chatId]=$sess;
+    // Clear active_page
+    foreach($db['users'] as &$lusr){
+        if((string)($lusr['id']??'')===(string)$chatId){
+            $lusr['active_page']='';break;
+        }
+    }
+    unset($lusr);
+    saveDB($botId,$db);
+    addLog($botId,'LA Form Capture complete for chat '.$chatId.($submitOk?' (submitted OK)':' (submit_url empty or failed)'),'success');
+    return true;
 }
 
 session_start();
@@ -4028,15 +4163,28 @@ if($page==='api'){
             jout(['ok'=>true,'sent'=>$sent,'failed'=>$fail]);break;
         case 'get_link_automation':
             $la=$db['settings']['link_automation']??['enabled'=>false,'rules'=>[]];
-            jout(['ok'=>true,'data'=>$la]);break;
+            // Also return the assigned la_bot_id from global bots config
+            $allBotsG=loadBots();$laBotIdG='';
+            foreach($allBotsG as $bG){if(!empty($bG['la_bot']))$laBotIdG=$bG['la_bot_id']??'';}
+            // la_bot_id is stored per-bot in the active bot's settings
+            $laBotIdG2=trim($db['settings']['la_bot_id']??'');
+            jout(['ok'=>true,'data'=>$la,'la_bot_id'=>$laBotIdG2]);break;
+        case 'set_la_bot':
+            if(!$actId)jout(['ok'=>false,'error'=>'No bot selected']);
+            $newLaBotId=preg_replace('/[^a-zA-Z0-9_]/','_',trim($body['la_bot_id']??''));
+            $db['settings']['la_bot_id']=$newLaBotId;
+            saveDB($actId,$db);
+            addLog($actId,'Link Automation bot set to: '.$newLaBotId,'info');
+            jout(['ok'=>true,'la_bot_id'=>$newLaBotId]);break;
         case 'save_link_automation':
             $laIn=$body['link_automation']??[];
             $laRules=[];
             foreach($laIn['rules']??[] as $rule){
                 $ruleUrl=trim($rule['url']??'');
                 $usesBrowser=(bool)($rule['use_browser']??false);
-                // URL required for curl-mode; for browser-mode URL may live inside browser_steps
-                if(empty($ruleUrl)&&!$usesBrowser)continue;
+                $usesFc=(bool)($rule['form_capture']??false);
+                // URL required for curl-mode; for browser-mode or form-capture URL may live elsewhere
+                if(empty($ruleUrl)&&!$usesBrowser&&!$usesFc)continue;
                 $rawBrowserSteps=$rule['browser_steps']??[];
                 $browserSteps=[];
                 foreach($rawBrowserSteps as $bs){
@@ -4061,9 +4209,18 @@ if($page==='api'){
                     'browser_steps'=>$browserSteps,
                     'browser_result_var'=>trim($rule['browser_result_var']??'result'),
                     'captcha_prompt'=>trim($rule['captcha_prompt']??'🔐 Solve the captcha and reply:'),
+                    'form_capture'=>$usesFc,
+                    'fc_submit_url'=>trim($rule['fc_submit_url']??''),
+                    'fc_fields'=>trim($rule['fc_fields']??''),
+                    'fc_success_msg'=>trim($rule['fc_success_msg']??'✅ Form submit ho gaya!'),
+                    'fc_headers'=>trim($rule['fc_headers']??''),
                 ];
             }
             $db['settings']['link_automation']=['enabled'=>(bool)($laIn['enabled']??false),'rules'=>$laRules];
+            // Save la_bot_id if provided in payload
+            if(isset($laIn['la_bot_id'])&&$laIn['la_bot_id']!==''){
+                $db['settings']['la_bot_id']=preg_replace('/[^a-zA-Z0-9_]/','_',trim($laIn['la_bot_id']));
+            }
             saveDB($actId,$db);
             addLog($actId,'Link Automation settings saved ('.(count($laRules)).' rules)','info');
             jout(['ok'=>true,'count'=>count($laRules)]);break;
@@ -6142,6 +6299,44 @@ td{padding:9px 11px;vertical-align:middle;}
         </div>
       </div>
       <p style="font-size:12px;color:var(--td);margin-bottom:0">Jab user koi specific keyword bheje, bot us linked URL ko fetch karega aur response wapas bhejega. GET/POST/curl sab support hai.</p>
+    </div>
+
+    <!-- Bot Selector for Link Automation -->
+    <div class="card" style="border-color:rgba(191,90,242,.5);background:linear-gradient(135deg,rgba(191,90,242,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:32px;height:32px;background:rgba(191,90,242,.15);border:2px solid rgba(191,90,242,.6);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">&#129302;</div>
+          <div>
+            <div class="st" style="color:var(--p);font-size:12px">&#129302; LINK AUTOMATION BOT</div>
+            <div style="font-size:10px;color:var(--td);margin-top:1px">Is bot me sirf Link Automation chalega — website form responses yahi bot forward karega</div>
+          </div>
+        </div>
+        <button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)" onclick="laSelectBot()">&#128257; Change Bot</button>
+      </div>
+      <div id="la-bot-info" style="background:var(--s2);border:1px solid rgba(191,90,242,.25);border-radius:8px;padding:10px;font-family:'Share Tech Mono';font-size:12px">
+        <span style="color:var(--td)">Loading...</span>
+      </div>
+      <div style="margin-top:10px;background:rgba(255,214,10,.06);border:1px solid rgba(255,214,10,.2);border-radius:7px;padding:8px 10px;font-size:11px;color:var(--y)">
+        &#9888;&#65039; <b>Form Capture Webhook URL</b> — apni website me yeh URL add karo, bot user ke saath interact karega aur response site pe bhejega:<br>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <code id="la-webhook-url" style="background:var(--s2);border:1px solid var(--b);padding:5px 9px;border-radius:5px;font-size:10px;color:var(--c);word-break:break-all;flex:1">—</code>
+          <button class="btn bg bsm" onclick="laCopyWebhook()" style="white-space:nowrap">&#128203; Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bot Selector Modal -->
+    <div id="la-bot-select-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.75);align-items:center;justify-content:center">
+      <div style="background:var(--s);border:1px solid rgba(191,90,242,.5);border-radius:14px;padding:20px;width:90%;max-width:420px;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <div class="st" style="color:var(--p)">&#129302; BOT SELECT KARO</div>
+          <button class="btn bd bsm" onclick="g('la-bot-select-modal').style.display='none'">&#10005;</button>
+        </div>
+        <p style="font-size:12px;color:var(--td);margin-bottom:12px">Koi ek bot select karo — Link Automation sirf usi bot me chalega.</p>
+        <div id="la-bot-select-list" style="display:flex;flex-direction:column;gap:8px">
+          <div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading bots...</div>
+        </div>
+      </div>
     </div>
 
     <div class="card" style="border-color:rgba(57,255,20,.35)">
@@ -8607,6 +8802,11 @@ function laAddRule(){
     enabled: true,
     access_control: '',
     timeout: 30,
+    form_capture: false,
+    fc_submit_url: '',
+    fc_fields: '',
+    fc_success_msg: '✅ Form submit ho gaya!',
+    fc_headers: '',
   });
   laRenderRules();
 }
@@ -8807,9 +9007,41 @@ function laRenderRules(){
           '<input type="text" class="fi" value="' + safe(rule.error_message) + '" placeholder="&#9888;&#65039; Error!" oninput="laUpdateRule('+idx+',\'error_message\',this.value)">' +
         '</div>' +
       '</div>' +
-      '<div class="fgrp">' +
+      '<div class="fgrp" style="margin-bottom:10px">' +
         '<label class="fl">&#128274; Access Control (blank=sab, ya Telegram IDs comma se)</label>' +
         '<input type="text" class="fi" value="' + safe(rule.access_control) + '" placeholder="{ADMINS} or 123456,789" oninput="laUpdateRule('+idx+',\'access_control\',this.value)">' +
+      '</div>' +
+      // Website Form Capture section
+      '<div style="background:rgba(255,159,10,.06);border:1px solid rgba(255,159,10,.3);border-radius:8px;padding:11px;margin-top:4px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:' + (rule.form_capture?'10':'0') + 'px">' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--o)">&#127760; WEBSITE FORM CAPTURE</span>' +
+            '<span style="font-size:9px;color:var(--td)">Website ke form fields bot se puche, reply site pe upload ho</span>' +
+          '</div>' +
+          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+            '<input type="checkbox" id="la-fc-enabled-'+idx+'" ' + (rule.form_capture?'checked':'') + ' onchange="laToggleFormCapture('+idx+',this.checked)" style="accent-color:var(--o);width:14px;height:14px">' +
+            '<span style="font-size:11px;color:' + (rule.form_capture?'var(--o)':'var(--td)') + ';font-family:\'Share Tech Mono\'">' + (rule.form_capture?'ON':'OFF') + '</span>' +
+          '</label>' +
+        '</div>' +
+        '<div id="la-fc-section-'+idx+'" style="display:' + (rule.form_capture?'block':'none') + '">' +
+          '<div style="font-size:9px;color:var(--td);margin-bottom:8px">Yahan website ke form fields define karo. Bot Telegram user se in fields ke jawab maangega, phir submit_url pe POST karega.</div>' +
+          '<div class="fgrp mb">' +
+            '<label class="fl">&#128228; Submit URL (form data yahan POST hoga)</label>' +
+            '<input type="text" class="fi" id="la-fc-submit-'+idx+'" value="' + safe(rule.fc_submit_url||'') + '" placeholder="https://yoursite.com/submit" oninput="laUpdateRule('+idx+',\'fc_submit_url\',this.value)" style="font-size:11px">' +
+          '</div>' +
+          '<div class="fgrp mb">' +
+            '<label class="fl">&#128196; Form Fields (ek line = ek field, format: field_name|Prompt message)</label>' +
+            '<textarea class="fta" id="la-fc-fields-'+idx+'" style="min-height:70px;font-size:11px" placeholder="name|Aapka naam kya hai?\nemail|Aapka email dalo\nphone|Phone number?" oninput="laUpdateRule('+idx+',\'fc_fields\',this.value)">' + safe(rule.fc_fields||'') + '</textarea>' +
+          '</div>' +
+          '<div class="fgrp mb">' +
+            '<label class="fl">&#9989; Success Message (submit ke baad user ko yeh bheja jaayega)</label>' +
+            '<input type="text" class="fi" id="la-fc-success-'+idx+'" value="' + safe(rule.fc_success_msg||'✅ Form submit ho gaya!') + '" placeholder="✅ Submitted!" oninput="laUpdateRule('+idx+',\'fc_success_msg\',this.value)" style="font-size:11px">' +
+          '</div>' +
+          '<div class="fgrp">' +
+            '<label class="fl">&#9889; Extra POST Headers (Key: Value per line, optional)</label>' +
+            '<textarea class="fta" id="la-fc-headers-'+idx+'" style="min-height:40px;font-size:11px" placeholder="Authorization: Bearer TOKEN" oninput="laUpdateRule('+idx+',\'fc_headers\',this.value)">' + safe(rule.fc_headers||'') + '</textarea>' +
+          '</div>' +
+        '</div>' +
       '</div>';
     container.appendChild(card);
     // Restore browser steps after card is in DOM
@@ -8827,6 +9059,83 @@ function laToggleBrowserMode(idx, enabled){
   if(bsSection) bsSection.style.display = enabled ? 'block' : 'none';
   if(curlSection) curlSection.style.display = enabled ? 'none' : 'block';
   if(lbl){ lbl.textContent = enabled ? 'ON' : 'OFF'; lbl.style.color = enabled ? 'var(--p)' : 'var(--td)'; }
+}
+
+function laToggleFormCapture(idx, enabled){
+  laUpdateRule(idx, 'form_capture', enabled);
+  const sec = g('la-fc-section-'+idx);
+  const lbl = document.querySelector('#la-fc-enabled-'+idx+' ~ span');
+  if(sec) sec.style.display = enabled ? 'block' : 'none';
+  if(lbl){ lbl.textContent = enabled ? 'ON' : 'OFF'; lbl.style.color = enabled ? 'var(--o)' : 'var(--td)'; }
+}
+
+// ─── LA Bot Selector ─────────────────────────────────────────────────────────
+let _laBotId = '';
+
+async function laLoad(){
+  const r = await api('get_link_automation');
+  if(!r.ok) return;
+  _laData = r.data || _laData;
+  _laBotId = r.la_bot_id || '';
+  laRenderUI();
+  laRenderBotInfo();
+}
+
+function laRenderBotInfo(){
+  const infoEl = g('la-bot-info');
+  const wuEl = g('la-webhook-url');
+  if(!infoEl) return;
+  if(!_laBotId){
+    infoEl.innerHTML = '<span style="color:var(--r)">&#10060; Koi bot assign nahi hai — &quot;Change Bot&quot; click karke bot select karo.</span>';
+    if(wuEl) wuEl.textContent = '—';
+    return;
+  }
+  api('get_bots').then(r => {
+    if(!r.ok||!r.data) return;
+    const b = r.data.find(x=>x.id===_laBotId);
+    if(b){
+      infoEl.innerHTML = '<span style="color:var(--g)">&#9989; </span><b style="color:var(--t)">'+b.name+'</b> <span style="color:var(--c)">@'+(b.username||'?')+'</span> <span style="color:var(--td);font-size:10px">ID: '+b.id+'</span>';
+    } else {
+      infoEl.innerHTML = '<span style="color:var(--y)">&#9888;&#65039; Bot ID: '+_laBotId+' (panel me nahi mila — shayad delete ho gaya)</span>';
+    }
+  });
+  if(wuEl){
+    const base = location.origin + location.pathname;
+    wuEl.textContent = base + '?la_webhook=' + encodeURIComponent(_laBotId);
+  }
+}
+
+function laCopyWebhook(){
+  const wuEl = g('la-webhook-url');
+  if(!wuEl||wuEl.textContent==='—') return;
+  navigator.clipboard.writeText(wuEl.textContent).then(()=>toast('✅ Webhook URL copied!','success')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=wuEl.textContent;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('✅ Copied!','success');
+  });
+}
+
+async function laSelectBot(){
+  const modal = g('la-bot-select-modal');
+  const listEl = g('la-bot-select-list');
+  modal.style.display='flex';
+  listEl.innerHTML='<div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading...</div>';
+  const r = await api('get_bots');
+  if(!r.ok||!r.data||!r.data.length){
+    listEl.innerHTML='<div style="color:var(--r);text-align:center;padding:12px;font-size:12px">Koi bot nahi mila. Pehle bot add karo.</div>';
+    return;
+  }
+  listEl.innerHTML='';
+  r.data.forEach(b=>{
+    const isSelected = b.id===_laBotId;
+    const div=document.createElement('div');
+    div.style.cssText='background:var(--s2);border:1px solid '+(isSelected?'rgba(191,90,242,.6)':'var(--b)')+';border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer';
+    div.innerHTML=`<div><b style="color:var(--t)">${b.name}</b> <span style="font-size:11px;color:var(--c)">@${b.username||'?'}</span>${isSelected?'<span style="margin-left:8px;background:rgba(191,90,242,.2);color:var(--p);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">SELECTED</span>':''}</div><button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)">Select</button>`;
+    div.querySelector('button').onclick=async()=>{
+      const sr=await api('set_la_bot',{la_bot_id:b.id});
+      if(sr.ok){_laBotId=b.id;modal.style.display='none';laRenderBotInfo();toast('✅ Bot set: '+b.name,'success');}
+      else toast('Error: '+(sr.error||''),'error');
+    };
+    listEl.appendChild(div);
+  });
 }
 
 async function laTestRule(idx){
@@ -8863,13 +9172,13 @@ async function laTestRule(idx){
 }
 
 async function laSave(silent=false){
-  // Collect browser_steps from DOM for each rule before saving
+  // Collect browser_steps and form_capture fields from DOM for each rule before saving
   const rules = (_laData.rules||[]).map((rule, idx) => {
     const bsContId = 'la-bs-c-'+idx;
     const steps = laGetBrowserSteps(bsContId);
     return {...rule, browser_steps: steps};
   });
-  const d = {enabled: _laData.enabled, rules};
+  const d = {enabled: _laData.enabled, rules, la_bot_id: _laBotId};
   const r = await api('save_link_automation', {link_automation: d});
   const res = g('la-save-result');
   if(r.ok){
