@@ -1309,6 +1309,121 @@ function handleFreeText($botId,$chatId,$isGroup,$uid,$u,&$db,$s,$msgText,$token,
     return false;
 }
 
+function getLaCaptchaSessFile($botId,$uid,$ruleId){
+    return getBotDir($botId).'lacap_'.preg_replace('/\W/','_',$uid).'_'.preg_replace('/\W/','_',$ruleId).'.json';
+}
+
+function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$token,$extraVars=[]){
+    $uid=(string)($u['id']??'');
+    $ruleId=$rule['id'];
+    $varMap=buildVarMap($u,$s,$msgText);
+    $vars=$varMap;
+    foreach($db['dyn_vars']??[] as $dk=>$dv)$vars[$dk]=$dv;
+    $vars=array_merge($vars,$extraVars);
+
+    // Determine browser steps: use rule's steps if defined, else auto-open the URL
+    $steps=$rule['browser_steps']??[];
+    if(empty($steps)){
+        $ruleUrl=trim($rule['url']??'');
+        foreach($varMap as $vk=>$vv)$ruleUrl=str_replace('{'.$vk.'}',$vv,$ruleUrl);
+        $steps=[['type'=>'open','value'=>$ruleUrl,'stop_on_error'=>true]];
+    }
+
+    $sessFile=getLaCaptchaSessFile($botId,$uid,$ruleId);
+    $resFile=getBotDir($botId).'lacres_'.preg_replace('/\W/','_',$uid).'_'.preg_replace('/\W/','_',$ruleId).'.json';
+    if(file_exists($resFile))@unlink($resFile);
+
+    $from=0;
+    if(!empty($extraVars['__lacap_resume'])){
+        $sess=file_exists($sessFile)?json_decode(file_get_contents($sessFile),true):[];
+        $from=(int)($sess['resume_from']??0);
+        $cVar=$sess['captcha_var']??'captcha';
+        $vars[$cVar]=$extraVars['captcha']??'';
+        foreach($sess['vars']??[] as $k=>$v)if(!isset($vars[$k]))$vars[$k]=$v;
+    }
+
+    $script=buildBrowserScript($steps,$vars,$sessFile,$resFile,$from);
+    $scrFile=getBotDir($botId).'lacsc_'.preg_replace('/\W/','_',$uid).'_'.preg_replace('/\W/','_',$ruleId).'.py';
+    file_put_contents($scrFile,$script);
+
+    $timeout=max(30,min(300,(int)($rule['timeout']??60)));
+    exec('timeout '.escapeshellarg($timeout).' python3 '.escapeshellarg($scrFile).' 2>/dev/null');
+    @unlink($scrFile);
+
+    $res=file_exists($resFile)?json_decode(file_get_contents($resFile),true):null;
+    if(!$res){
+        $errMsg=htmlspecialchars($rule['error_message']??'⚠️ Error fetching link response.',ENT_NOQUOTES,'UTF-8');
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>$errMsg,'parse_mode'=>'HTML'],$token);
+        addLog($botId,"LinkAuto Browser FAIL [{$ruleId}]",'error');
+        return;
+    }
+
+    if(($res['status']??'')==='captcha_needed'){
+        $b64=$res['captcha_image']??'';
+        $prompt=$res['captcha_prompt']??($rule['captcha_prompt']??'🔐 Solve the captcha and reply:');
+        // Save session state for resume
+        $sessData=['resume_from'=>$res['resume_from'],'captcha_var'=>$res['captcha_var']??'captcha','vars'=>$res['vars']??[],'rule_id'=>$ruleId];
+        file_put_contents($sessFile,json_encode($sessData,JSON_UNESCAPED_UNICODE),LOCK_EX);
+        // Mark user as waiting for captcha reply for this rule
+        $db['users'][$uid]['active_page']='__lacap__'.$ruleId;
+        saveDB($botId,$db);
+        if($b64){
+            $tmp=tempnam(sys_get_temp_dir(),'lacap_').'.png';
+            file_put_contents($tmp,base64_decode($b64));
+            $ch=curl_init();
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
+            curl_exec($ch);curl_close($ch);@unlink($tmp);
+        }else{
+            tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt,'parse_mode'=>'HTML'],$token);
+        }
+        addLog($botId,"LinkAuto Browser captcha [{$ruleId}]",'info');
+        return;
+    }
+
+    // Send any screenshots from steps
+    foreach($res['steps']??[] as $step){
+        if(($step['type']??'')==='screenshot'&&!empty($step['send'])&&!empty($step['image'])){
+            $tmp=tempnam(sys_get_temp_dir(),'lass_').'.png';
+            file_put_contents($tmp,base64_decode($step['image']));
+            $cap=htmlspecialchars($step['caption']??'',ENT_NOQUOTES,'UTF-8');
+            $ch=curl_init();
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$cap,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','ss.png')]]);
+            $sr=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($tmp);
+            if(!empty($step['delete_after'])&&!empty($sr['result']['message_id'])){
+                sleep(5);tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$sr['result']['message_id']],$token);
+            }
+        }
+    }
+
+    // Build reply using result vars from browser + reply_template
+    $allVars=array_merge($vars,$res['vars']??[]);
+    $resultVar=$rule['browser_result_var']??'result';
+    $extracted=isset($allVars[$resultVar])?(string)$allVars[$resultVar]:null;
+    if($extracted===null){
+        // Try common var names
+        foreach(['result','response','text','content','answer','output','data'] as $fk){
+            if(isset($allVars[$fk])&&trim((string)$allVars[$fk])!==''){$extracted=(string)$allVars[$fk];break;}
+        }
+    }
+    if($extracted===null)$extracted='';
+
+    $rawHtml=htmlspecialchars($extracted,ENT_NOQUOTES,'UTF-8');
+    $tmpl=$rule['reply_template']??'{response}';
+    $tmpl=str_replace(['{response}','{result}','{curl_response}'],[$rawHtml,$rawHtml,$rawHtml],$tmpl);
+    // Replace any {varname} from browser vars
+    foreach($allVars as $k=>$v)$tmpl=str_replace('{'.$k.'}',htmlspecialchars((string)$v,ENT_NOQUOTES,'UTF-8'),$tmpl);
+    $tmpl=pvNoStamp($tmpl,$u,$s,$msgText,'',$db);
+
+    tg('sendMessage',['chat_id'=>$chatId,'text'=>$tmpl,'parse_mode'=>'HTML'],$token);
+    $st=$res['status']??'done';
+    addLog($botId,"LinkAuto Browser ".strtoupper($st)." [{$ruleId}]: ".mb_substr($msgText,0,40)." by ".($u['name']??''),'success');
+    // Clean up
+    if(file_exists($sessFile))@unlink($sessFile);
+    @unlink($resFile);
+}
+
 function execLinkAutomation($botId,$chatId,$u,&$db,$s,$msgText,$token){
     $laCfg=$s['link_automation']??['enabled'=>false,'rules'=>[]];
     if(empty($laCfg['enabled']))return false;
@@ -1319,6 +1434,11 @@ function execLinkAutomation($botId,$chatId,$u,&$db,$s,$msgText,$token){
         $trigger=strtolower(trim($rule['trigger']??''));
         if($trigger===''||$trigger!==$msgLower)continue;
         if(!empty($rule['access_control'])&&!hasAccess($u['id']??'',$chatId,$rule['access_control'],$s['global_vars']??''))continue;
+        // Browser mode: delegate to browser executor with captcha support
+        if(!empty($rule['use_browser'])){
+            execLinkAutomationBrowser($botId,$chatId,$u,$db,$s,$msgText,$rule,$token);
+            return true;
+        }
         $ruleUrl=trim($rule['url']??'');
         if(empty($ruleUrl))continue;
         // Replace {query}, {tg_name}, {tg_id}, {tg_username} in URL and body
@@ -3221,6 +3341,18 @@ if(isset($_GET['webhook_bot'])){
             }
             http_response_code(200);exit;
         }
+        // Link Automation captcha resume: user replied to captcha for a browser-mode LA rule
+        if(str_starts_with($activePgId,'__lacap__')){
+            $laRuleId=substr($activePgId,9);
+            $laRule=null;
+            $laRules=$s['link_automation']['rules']??[];
+            foreach($laRules as $lr){if(($lr['id']??'')===($laRuleId))$laRule=$lr;}
+            $u['active_page']='';saveDB($botId,$db);
+            if($laRule){
+                execLinkAutomationBrowser($botId,$chatId,$u,$db,$s,$msgText,$laRule,$token,['captcha'=>$msgText,'__lacap_resume'=>true]);
+            }
+            http_response_code(200);exit;
+        }
         if($activePgId){
             $activePg=null;
             foreach($db['pages'] as $pg){if($pg['id']===$activePgId){$activePg=$pg;break;}}
@@ -3902,7 +4034,15 @@ if($page==='api'){
             $laRules=[];
             foreach($laIn['rules']??[] as $rule){
                 $ruleUrl=trim($rule['url']??'');
-                if(empty($ruleUrl))continue;
+                $usesBrowser=(bool)($rule['use_browser']??false);
+                // URL required for curl-mode; for browser-mode URL may live inside browser_steps
+                if(empty($ruleUrl)&&!$usesBrowser)continue;
+                $rawBrowserSteps=$rule['browser_steps']??[];
+                $browserSteps=[];
+                foreach($rawBrowserSteps as $bs){
+                    if(!is_array($bs)||empty($bs['type']))continue;
+                    $browserSteps[]=$bs;
+                }
                 $laRules[]=[
                     'id'=>!empty($rule['id'])?$rule['id']:uniqid('la_'),
                     'label'=>trim($rule['label']??$ruleUrl),
@@ -3917,6 +4057,10 @@ if($page==='api'){
                     'enabled'=>(bool)($rule['enabled']??true),
                     'access_control'=>trim($rule['access_control']??''),
                     'timeout'=>max(5,min(120,(int)($rule['timeout']??30))),
+                    'use_browser'=>$usesBrowser,
+                    'browser_steps'=>$browserSteps,
+                    'browser_result_var'=>trim($rule['browser_result_var']??'result'),
+                    'captcha_prompt'=>trim($rule['captcha_prompt']??'🔐 Solve the captcha and reply:'),
                 ];
             }
             $db['settings']['link_automation']=['enabled'=>(bool)($laIn['enabled']??false),'rules'=>$laRules];
@@ -8477,6 +8621,81 @@ function laUpdateRule(idx, field, value){
   if(_laData.rules[idx]) _laData.rules[idx][field] = value;
 }
 
+// ─── LA Browser Step Helpers ─────────────────────────────────────────────────
+const LA_BS_TYPES = {
+  open:{label:'🌐 Open URL',fields:[{k:'value',ph:'https://site.com',label:'URL'}]},
+  click:{label:'👆 Click',fields:[{k:'selector',ph:'#btn or //button',label:'Selector'},{k:'x',ph:'X (optional)',label:'X'},{k:'y',ph:'Y (optional)',label:'Y'}]},
+  fill:{label:'⌨️ Fill Input',fields:[{k:'selector',ph:'#email',label:'Selector'},{k:'value',ph:'{query} or text',label:'Value'}]},
+  screenshot:{label:'📸 Screenshot',fields:[{k:'caption',ph:'Result',label:'Caption'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'}],checks:[{k:'send_ss',label:'Send to user'},{k:'delete_after',label:'Del after'}]},
+  ask_captcha:{label:'🔐 Ask Captcha (relay to bot)',fields:[{k:'caption',ph:'🔐 Reply with captcha:',label:'Prompt'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'},{k:'var_name',ph:'captcha',label:'Reply→var'}]},
+  wait:{label:'⏱ Wait',fields:[{k:'value',ph:'2',label:'Secs'}]},
+  wait_element:{label:'⌛ Wait Elem',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'timeout',ph:'10',label:'Timeout(s)'}]},
+  get_text:{label:'📋 Get Text→Var',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'var_name',ph:'result',label:'Save as'}]},
+  js_eval:{label:'⚡ JS Eval→Var',fields:[{k:'value',ph:'document.title',label:'JS'},{k:'var_name',ph:'js_result',label:'Save as'}]},
+  scroll:{label:'↕️ Scroll',fields:[{k:'value',ph:'500',label:'Pixels'}]},
+  reload:{label:'🔄 Reload',fields:[]},
+  set_var:{label:'📦 Set Var',fields:[{k:'var_name',ph:'myvar',label:'Var name'},{k:'value',ph:'fixed or {other}',label:'Value'}]},
+  key:{label:'⌨️ Key Press',fields:[{k:'value',ph:'Enter Tab Escape',label:'Key'}]},
+  select:{label:'📋 Select Option',fields:[{k:'selector',ph:'select#lang',label:'Selector'},{k:'value',ph:'English',label:'Option'}]},
+  cookie_set:{label:'🍪 Set Cookie',fields:[{k:'name',ph:'session',label:'Name'},{k:'value',ph:'{token}',label:'Value'}]},
+  cookie_get:{label:'🍪 Get Cookie→Var',fields:[{k:'name',ph:'auth_token',label:'Name'},{k:'var_name',ph:'cookie_val',label:'Save as'}]},
+  iframe_switch:{label:'🖼 IFrame In',fields:[{k:'selector',ph:'iframe#frame1',label:'Selector'}]},
+  iframe_main:{label:'🖼 IFrame Out',fields:[]},
+  raw:{label:'⚡ Raw Python',fields:[{k:'value',ph:'PAGE.evaluate("return document.title")',label:'Python code'}]},
+};
+
+function laBuildBsFields(def, data={}){
+  let h='';
+  for(const f of(def.fields||[])){
+    const v=(data[f.k]||'').toString().replace(/"/g,'&quot;');
+    h+=`<div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:100px"><label style="font-size:9px;color:var(--td);font-family:'Share Tech Mono'">${f.label}</label><input type="text" class="fi la-bs-f-${f.k}" placeholder="${(f.ph||'').replace(/'/g,"&#39;")}" value="${v}" style="font-size:11px"></div>`;
+  }
+  for(const c of(def.checks||[])){
+    h+=`<div style="display:flex;align-items:center;gap:4px;padding-top:14px"><input type="checkbox" class="la-bs-f-${c.k}" ${data[c.k]?'checked':''}><label style="font-size:10px;color:var(--td)">${c.label}</label></div>`;
+  }
+  return h;
+}
+
+function laAddBrowserStep(containerId, data={}){
+  const stype = data.type||'open';
+  const def = LA_BS_TYPES[stype]||LA_BS_TYPES.open;
+  const d = document.createElement('div');
+  d.className = 'la-bstep-row';
+  d.style.cssText = 'background:var(--s3);border:1px solid rgba(191,90,242,.3);border-radius:7px;padding:9px;margin-bottom:5px';
+  d.innerHTML = `<div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;flex-wrap:wrap">
+    <select class="fsel la-bs-type" onchange="onLaBsTypeChange(this)" style="flex:1;min-width:140px;font-size:11px">
+      ${Object.entries(LA_BS_TYPES).map(([k,v])=>`<option value="${k}" ${k===stype?'selected':''}>${v.label}</option>`).join('')}
+    </select>
+    <label style="font-size:10px;color:var(--r);display:flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" class="la-bs-stop" ${data.stop_on_error?'checked':''}>stop on err</label>
+    <button class="btn bg bsm" onclick="const r=this.closest('.la-bstep-row');const p=r.previousElementSibling;if(p&&p.classList.contains('la-bstep-row'))r.parentNode.insertBefore(r,p)" style="padding:3px 7px">↑</button>
+    <button class="btn bg bsm" onclick="const r=this.closest('.la-bstep-row');const n=r.nextElementSibling;if(n&&n.classList.contains('la-bstep-row'))r.parentNode.insertBefore(n,r)" style="padding:3px 7px">↓</button>
+    <button class="btn bd bsm" onclick="this.closest('.la-bstep-row').remove()" style="padding:3px 7px">✕</button>
+  </div><div class="la-bs-fields" style="display:flex;flex-wrap:wrap;gap:6px">${laBuildBsFields(def,data)}</div>`;
+  const container = g(containerId);
+  if(container) container.appendChild(d);
+}
+
+function onLaBsTypeChange(sel){
+  const row = sel.closest('.la-bstep-row');
+  const def = LA_BS_TYPES[sel.value]||{fields:[],checks:[]};
+  row.querySelector('.la-bs-fields').innerHTML = laBuildBsFields(def);
+}
+
+function laGetBrowserSteps(containerId){
+  const steps = [];
+  const container = g(containerId);
+  if(!container) return steps;
+  container.querySelectorAll('.la-bstep-row').forEach(row => {
+    const stype = row.querySelector('.la-bs-type')?.value||'open';
+    const def = LA_BS_TYPES[stype]||{fields:[],checks:[]};
+    const s = {type:stype, stop_on_error: row.querySelector('.la-bs-stop')?.checked||false};
+    for(const f of(def.fields||[])){const el=row.querySelector('.la-bs-f-'+f.k);if(el)s[f.k]=el.value||'';}
+    for(const c of(def.checks||[])){const el=row.querySelector('.la-bs-f-'+c.k);if(el)s[c.k]=el.checked||false;}
+    steps.push(s);
+  });
+  return steps;
+}
+
 function laRenderRules(){
   const container = g('la-rules-list');
   if(!container) return;
@@ -8490,6 +8709,8 @@ function laRenderRules(){
     const card = document.createElement('div');
     card.style.cssText = 'background:var(--s2);border:1px solid rgba(0,245,255,.25);border-radius:10px;padding:14px;position:relative';
     const safe = v => (v||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const useBrowser = !!rule.use_browser;
+    const bsContId = 'la-bs-c-'+idx;
     card.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">' +
         '<div style="display:flex;align-items:center;gap:8px">' +
@@ -8510,7 +8731,39 @@ function laRenderRules(){
           '<input type="text" class="fi" value="' + safe(rule.trigger) + '" placeholder="price, weather, status..." oninput="laUpdateRule('+idx+',\'trigger\',this.value)" style="color:var(--y)">' +
         '</div>' +
       '</div>' +
-      '<div style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:11px;margin-bottom:10px">' +
+      // Browser mode toggle
+      '<div style="background:rgba(191,90,242,.07);border:1px solid rgba(191,90,242,.3);border-radius:8px;padding:10px;margin-bottom:10px">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:' + (useBrowser?'10':'0') + 'px">' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--p)">&#129302; BROWSER MODE</span>' +
+            '<span style="font-size:9px;color:var(--td)">Captcha bhi bot pe aayega</span>' +
+          '</div>' +
+          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+            '<input type="checkbox" id="la-use-browser-'+idx+'" ' + (useBrowser?'checked':'') + ' onchange="laToggleBrowserMode('+idx+',this.checked)" style="accent-color:var(--p);width:14px;height:14px">' +
+            '<span style="font-size:11px;color:' + (useBrowser?'var(--p)':'var(--td)') + ';font-family:\'Share Tech Mono\'">' + (useBrowser?'ON':'OFF') + '</span>' +
+          '</label>' +
+        '</div>' +
+        // Browser steps section (shown only when use_browser=true)
+        '<div id="la-browser-section-'+idx+'" style="display:' + (useBrowser?'block':'none') + '">' +
+          '<div style="font-size:9px;color:var(--td);margin-bottom:6px">Steps: browser ko kya karna hai (open, click, fill, ask_captcha etc). Agar blank — URL field se direct open hoga.</div>' +
+          '<div id="' + bsContId + '" style="margin-bottom:6px"></div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">' +
+            Object.entries(LA_BS_TYPES).map(([k,v])=>'<button class="btn bg bsm" onclick="laAddBrowserStep(\''+bsContId+'\',{type:\''+k+'\'})" style="font-size:10px;padding:3px 7px">'+v.label+'</button>').join('') +
+          '</div>' +
+          '<div class="fg">' +
+            '<div class="fgrp">' +
+              '<label class="fl">&#128300; Result Var (browser se result kahan store hua) e.g. <code>result</code></label>' +
+              '<input type="text" class="fi" id="la-result-var-'+idx+'" value="' + safe(rule.browser_result_var||'result') + '" placeholder="result" oninput="laUpdateRule('+idx+',\'browser_result_var\',this.value)" style="font-size:11px">' +
+            '</div>' +
+            '<div class="fgrp">' +
+              '<label class="fl">&#128274; Captcha Prompt (user ko bheja jaayega)</label>' +
+              '<input type="text" class="fi" id="la-captcha-prompt-'+idx+'" value="' + safe(rule.captcha_prompt||'🔐 Solve the captcha and reply:') + '" placeholder="&#128272; Solve the captcha and reply:" oninput="laUpdateRule('+idx+',\'captcha_prompt\',this.value)" style="font-size:11px">' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      // cURL section (shown only when use_browser=false)
+      '<div id="la-curl-section-'+idx+'" style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:11px;margin-bottom:10px;display:' + (useBrowser?'none':'block') + '">' +
         '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--c);margin-bottom:8px">&#127758; URL CONFIG</div>' +
         '<div class="fg mb">' +
           '<div class="fgrp">' +
@@ -8525,7 +8778,7 @@ function laRenderRules(){
           '</div>' +
           '<div class="fgrp">' +
             '<label class="fl">Timeout (s)</label>' +
-            '<input type="number" class="fi" value="' + (rule.timeout||30) + '" min="5" max="120" oninput="laUpdateRule('+idx+',\'timeout\',parseInt(this.value)||30)">' +
+            '<input type="number" class="fi" value="' + (rule.timeout||30) + '" min="5" max="300" oninput="laUpdateRule('+idx+',\'timeout\',parseInt(this.value)||30)">' +
           '</div>' +
         '</div>' +
         '<div class="fgrp mb">' +
@@ -8546,7 +8799,7 @@ function laRenderRules(){
       '<div style="background:rgba(57,255,20,.04);border:1px solid rgba(57,255,20,.2);border-radius:8px;padding:11px;margin-bottom:10px">' +
         '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--g);margin-bottom:8px">&#128172; REPLY TEMPLATE</div>' +
         '<div class="fgrp mb">' +
-          '<label class="fl">Reply Template — {response} = fetched data, {field} = JSON field</label>' +
+          '<label class="fl">Reply Template — {response} = fetched data, {varname} = browser var</label>' +
           '<textarea class="fta" style="min-height:70px" placeholder="&#128279; Result:\n{response}" oninput="laUpdateRule('+idx+',\'reply_template\',this.value)">' + safe(rule.reply_template) + '</textarea>' +
         '</div>' +
         '<div class="fgrp">' +
@@ -8559,7 +8812,21 @@ function laRenderRules(){
         '<input type="text" class="fi" value="' + safe(rule.access_control) + '" placeholder="{ADMINS} or 123456,789" oninput="laUpdateRule('+idx+',\'access_control\',this.value)">' +
       '</div>';
     container.appendChild(card);
+    // Restore browser steps after card is in DOM
+    if(useBrowser && rule.browser_steps && rule.browser_steps.length){
+      rule.browser_steps.forEach(step => laAddBrowserStep(bsContId, step));
+    }
   });
+}
+
+function laToggleBrowserMode(idx, enabled){
+  laUpdateRule(idx, 'use_browser', enabled);
+  const bsSection = g('la-browser-section-'+idx);
+  const curlSection = g('la-curl-section-'+idx);
+  const lbl = document.querySelector('#la-use-browser-'+idx+' ~ span');
+  if(bsSection) bsSection.style.display = enabled ? 'block' : 'none';
+  if(curlSection) curlSection.style.display = enabled ? 'none' : 'block';
+  if(lbl){ lbl.textContent = enabled ? 'ON' : 'OFF'; lbl.style.color = enabled ? 'var(--p)' : 'var(--td)'; }
 }
 
 async function laTestRule(idx){
@@ -8596,7 +8863,13 @@ async function laTestRule(idx){
 }
 
 async function laSave(silent=false){
-  const d = {enabled: _laData.enabled, rules: _laData.rules || []};
+  // Collect browser_steps from DOM for each rule before saving
+  const rules = (_laData.rules||[]).map((rule, idx) => {
+    const bsContId = 'la-bs-c-'+idx;
+    const steps = laGetBrowserSteps(bsContId);
+    return {...rule, browser_steps: steps};
+  });
+  const d = {enabled: _laData.enabled, rules};
   const r = await api('save_link_automation', {link_automation: d});
   const res = g('la-save-result');
   if(r.ok){
