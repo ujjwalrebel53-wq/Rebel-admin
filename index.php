@@ -1599,6 +1599,128 @@ function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$tok
     @unlink($resFile);
 }
 
+// ─── /fetch {mobile} {Full Name} — UIDAI Retrieve Enrollment Number ──────────
+function getUidaiFetchSessFile($botId,$uid){
+    return getBotDir($botId).'uidaifetch_'.preg_replace('/\W/','_',$uid).'.json';
+}
+function getUidaiFetchResFile($botId,$uid){
+    return getBotDir($botId).'uidaifetch_res_'.preg_replace('/\W/','_',$uid).'.json';
+}
+
+function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extraVars=[]){
+    $uid=(string)($u['id']??'');
+    $sessFile=getUidaiFetchSessFile($botId,$uid);
+    $resFile=getUidaiFetchResFile($botId,$uid);
+    if(file_exists($resFile))@unlink($resFile);
+
+    $vars=['mobile'=>$mobile,'full_name'=>$fullName,'tg_name'=>$u['name']??'','tg_id'=>$uid,'tg_username'=>$u['username']??'','query'=>$mobile.' '.$fullName];
+    $vars=array_merge($vars,$extraVars);
+
+    $from=0;
+    if(!empty($extraVars['__uidaifetch_resume'])){
+        $sess=file_exists($sessFile)?json_decode(file_get_contents($sessFile),true):[];
+        $from=(int)($sess['resume_from']??0);
+        $vars['captcha']=$extraVars['captcha']??'';
+        foreach($sess['vars']??[] as $k=>$v)if(!isset($vars[$k]))$vars[$k]=$v;
+    }
+
+    // UIDAI Retrieve Enrollment Number steps
+    // URL: https://resident.uidai.gov.in/retrieve-eid-uid
+    $steps=[
+        ['type'=>'open','value'=>'https://resident.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
+        ['type'=>'wait_load','value'=>'networkidle','timeout'=>'25'],
+        // Click "Mobile" radio to search by mobile number (default should be there)
+        ['type'=>'wait_element','selector'=>'input[type="radio"][value="M"], #mobileRadio, label[for*="mobile"], input[name*="searchBy"]','timeout'=>'15','stop_on_error'=>false],
+        ['type'=>'js_eval','value'=>'(()=>{var r=document.querySelector(\'input[type="radio"][value="M"],input[type="radio"][id*="mobile"],input[name*="searchBy"][value="M"]\');if(r){r.click();return "clicked";}return "not found";})()','var_name'=>'radio_clicked'],
+        // Fill Full Name
+        ['type'=>'wait_element','selector'=>'input[formcontrolname="fullName"], input[placeholder*="Full Name"], input[placeholder*="full name"], #fullName, input[name*="fullName"]','timeout'=>'15','stop_on_error'=>true],
+        ['type'=>'fill','selector'=>'input[formcontrolname="fullName"], input[placeholder*="Full Name"], input[placeholder*="full name"], #fullName, input[name*="fullName"]','value'=>'{full_name}'],
+        // Fill Mobile Number
+        ['type'=>'fill','selector'=>'input[formcontrolname="mobileNo"], input[formcontrolname="mobile"], input[placeholder*="Mobile"], input[placeholder*="mobile"], #mobileNo, input[name*="mobile"]','value'=>'{mobile}'],
+        // Take screenshot of form to verify
+        ['type'=>'screenshot','caption'=>'Form filled — checking captcha','send_ss'=>false,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
+        // Ask captcha
+        ['type'=>'ask_captcha','caption'=>'🔐 <b>UIDAI Captcha</b> — screenshot mein jo code dikh raha hai woh reply karo:','crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>'','var_name'=>'captcha'],
+        // Fill captcha
+        ['type'=>'fill','selector'=>'input[formcontrolname="captchaText"], input[placeholder*="aptcha"], input[placeholder*="security"], input[name*="captcha"], #captchaText','value'=>'{captcha}'],
+        // Click Send OTP
+        ['type'=>'click','selector'=>'button[type="submit"], .send-otp-btn, button:contains("Send OTP"), .btn-send-otp, .submit-btn','stop_on_error'=>false],
+        ['type'=>'wait_load','value'=>'networkidle','timeout'=>'20'],
+        // Take result screenshot and send to user
+        ['type'=>'screenshot','caption'=>'UIDAI Response','send_ss'=>true,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
+        // Get result text
+        ['type'=>'get_text','selector'=>'.success-message, .error-message, .alert, .result-msg, mat-card p, .otp-sent-msg, .ng-star-inserted h3, h3, .info-box','var_name'=>'result'],
+    ];
+
+    $script=buildBrowserScript($steps,$vars,$sessFile,$resFile,$from);
+    $scrFile=getBotDir($botId).'uidaifetch_sc_'.preg_replace('/\W/','_',$uid).'.py';
+    file_put_contents($scrFile,$script);
+
+    // Send "working..." message
+    if(empty($extraVars['__uidaifetch_resume'])){
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>'⏳ <b>UIDAI pe search kar raha hun...</b>\n\n📱 Mobile: <code>'.$mobile.'</code>\n👤 Name: <code>'.htmlspecialchars($fullName,ENT_QUOTES,'UTF-8').'</code>','parse_mode'=>'HTML'],$token);
+    }
+
+    runPythonScript($scrFile,180);
+    @unlink($scrFile);
+
+    $res=file_exists($resFile)?json_decode(file_get_contents($resFile),true):null;
+    if(!$res){
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>'❌ <b>Browser error!</b>\nPlaywright/Python VPS pe install hai? Check karo Dashboard → Diagnostics.','parse_mode'=>'HTML'],$token);
+        addLog($botId,"UidaiFetch FAIL uid=$uid",'error');
+        return;
+    }
+
+    // Captcha needed — show image to user
+    if(($res['status']??'')==='captcha_needed'){
+        $b64=$res['captcha_image']??'';
+        $prompt=$res['captcha_prompt']??'🔐 <b>Captcha</b> — jo code dikh raha hai woh reply karo:';
+        $sessData=['resume_from'=>$res['resume_from'],'vars'=>$res['vars']??[]];
+        file_put_contents($sessFile,json_encode($sessData,JSON_UNESCAPED_UNICODE),LOCK_EX);
+        $db['users'][$uid]['active_page']='__uidaifetch__';
+        // Store mobile+name for resume
+        $db['users'][$uid]['__uidaifetch_mobile__']=$mobile;
+        $db['users'][$uid]['__uidaifetch_name__']=$fullName;
+        saveDB($botId,$db);
+        if($b64){
+            $tmp=tempnam(sys_get_temp_dir(),'ucap_').'.png';
+            file_put_contents($tmp,base64_decode($b64));
+            $ch=curl_init();
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
+            curl_exec($ch);curl_close($ch);@unlink($tmp);
+        } else {
+            tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt,'parse_mode'=>'HTML'],$token);
+        }
+        addLog($botId,"UidaiFetch captcha sent to uid=$uid",'info');
+        return;
+    }
+
+    // Send screenshots
+    foreach($res['steps']??[] as $step){
+        if(($step['type']??'')==='screenshot'&&!empty($step['send'])&&!empty($step['image'])){
+            $tmp=tempnam(sys_get_temp_dir(),'uss_').'.png';
+            file_put_contents($tmp,base64_decode($step['image']));
+            $cap=htmlspecialchars($step['caption']??'UIDAI Result',ENT_NOQUOTES,'UTF-8');
+            $ch=curl_init();
+            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$cap,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','ss.png')]]);
+            curl_exec($ch);curl_close($ch);@unlink($tmp);
+        }
+    }
+
+    // Send text result
+    $allVars=array_merge($vars,$res['vars']??[]);
+    $result=trim($allVars['result']??'');
+    if($result!==''){
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>"📋 <b>UIDAI Response:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8'),'parse_mode'=>'HTML'],$token);
+    }
+    addLog($botId,"UidaiFetch OK uid=$uid mobile=$mobile",'success');
+    // Cleanup
+    if(file_exists($sessFile))@unlink($sessFile);
+    @unlink($resFile);
+}
+
 function execLinkAutomation($botId,$chatId,$u,&$db,$s,$msgText,$token){
     $laCfg=$s['link_automation']??['enabled'=>false,'rules'=>[]];
     if(empty($laCfg['enabled']))return false;
@@ -3332,6 +3454,17 @@ if(isset($_GET['webhook_bot'])){
             }
         }// end roseEnabled commands
 
+        // ── /fetch captcha resume (user replied with captcha text, not a command) ──
+        if(($u['active_page']??'')==='__uidaifetch__'&&!str_starts_with($msgText,'/')){
+            $mobile2=$u['__uidaifetch_mobile__']??'';
+            $name2=$u['__uidaifetch_name__']??'';
+            $db['users'][$uid]['active_page']='';
+            unset($db['users'][$uid]['__uidaifetch_mobile__'],$db['users'][$uid]['__uidaifetch_name__']);
+            saveDB($botId,$db);
+            execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile2,$name2,['captcha'=>$msgText,'__uidaifetch_resume'=>true]);
+            http_response_code(200);exit;
+        }
+
         if(str_starts_with($msgText,'/')){
             $db['stats']['cmds']++;saveDB($botId,$db);
             $pts=explode(' ',$msgText);$cmd=strtolower(explode('@',$pts[0])[0]);
@@ -3509,6 +3642,25 @@ if(isset($_GET['webhook_bot'])){
                 }
                 http_response_code(200);exit;
             }
+            http_response_code(200);exit;
+        }
+
+        // ── /fetch {mobile} {Full Name} ──────────────────────────────────────────
+        if($cmdStr==='fetch'){
+            $args=array_values(array_filter(explode(' ',trim($query))));
+            $mobile=trim($args[0]??'');
+            // Rest of args = full name (can have spaces)
+            array_shift($args);
+            $fullName=trim(implode(' ',$args));
+            if($mobile===''||!preg_match('/^\d{10}$/',$mobile)){
+                tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Wrong format!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>\n\n📱 Pehle 10-digit mobile number\n👤 Phir poora naam (spaces ke saath)","parse_mode"=>"HTML"],$token);
+                http_response_code(200);exit;
+            }
+            if($fullName===''){
+                tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name nahi diya!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>","parse_mode"=>"HTML"],$token);
+                http_response_code(200);exit;
+            }
+            execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile,$fullName);
             http_response_code(200);exit;
         }
 
@@ -4651,7 +4803,6 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="ni" onclick="nav('rosebot',this)" style="color:#ff6b9d;border-left:2px solid #ff6b9d">🔥 The Rebel Bot</button>
     <button class="ni" onclick="nav('hiddeneye',this)" style="color:#39ff14;border-left:2px solid #39ff14">👁 Hidden Eye Bot</button>
         <button class="ni" onclick="nav('promobot',this)" style="color:#ff9f0a;border-left:2px solid #ff9f0a">📢 Promo Bot</button>
-    <button class="ni" onclick="nav('linkautomation',this)" style="color:#00f5ff;border-left:2px solid #00f5ff">🔗 Link Automation</button>
     <a href="?page=logout" class="ni" style="color:var(--r)">🚪 Logout</a>
   </nav>
 </aside>
@@ -6540,93 +6691,6 @@ memory_limit = 512M</code>
     </div>
   </div>
 
-  <!-- LINK AUTOMATION SECTION -->
-  <div class="panel" id="p-linkautomation">
-
-    <!-- Header card -->
-    <div class="card" style="border-color:rgba(0,245,255,.5);background:linear-gradient(135deg,rgba(0,245,255,.05),rgba(13,17,23,1))">
-      <div class="sh">
-        <div>
-          <div class="st" style="color:var(--c);font-size:14px">&#128279; LINK AUTOMATION</div>
-          <div style="font-size:12px;color:var(--td);margin-top:3px">User keyword bheje → bot URL fetch kare → response wapas bheje</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span id="la-status-label" style="font-family:'Share Tech Mono';font-size:12px;color:var(--td);font-weight:700">OFF</span>
-          <button id="la-toggle-btn" class="btn bsm bg" onclick="laToggle()" style="min-width:80px;padding:7px 14px">Enable</button>
-        </div>
-      </div>
-      <!-- Quick how-to -->
-      <div style="background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--td);line-height:1.8">
-        <b style="color:var(--c)">Kaise use kare:</b><br>
-        1&#65039;&#8423; Bot ka webhook Start karo (Dashboard &gt; Start Bot)<br>
-        2&#65039;&#8423; Enable button click karo (upar)<br>
-        3&#65039;&#8423; &quot;+ Add Rule&quot; click karo, Trigger keyword aur URL bharo<br>
-        4&#65039;&#8423; &quot;&#128190; Save All&quot; click karo<br>
-        5&#65039;&#8423; Telegram pe trigger keyword bhejo — bot reply karega!
-      </div>
-    </div>
-
-    <!-- Rules Card -->
-    <div class="card" style="border-color:rgba(57,255,20,.35)">
-      <div class="sh">
-        <div>
-          <div class="st" style="color:var(--g)">&#128396; RULES</div>
-          <div style="font-size:11px;color:var(--td);margin-top:2px">Trigger = exact word jo user type kare (case insensitive)</div>
-        </div>
-        <button class="btn bsu bsm" onclick="laAddRule()" style="padding:7px 14px">+ Add Rule</button>
-      </div>
-
-      <div id="la-rules-list" style="display:flex;flex-direction:column;gap:12px">
-        <div style="text-align:center;color:var(--td);font-size:12px;padding:24px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">
-          Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.
-        </div>
-      </div>
-
-      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn bsu" onclick="laSave()" style="flex:1;padding:11px;font-size:14px">&#128190; Save All Rules</button>
-      </div>
-      <div id="la-save-result" style="margin-top:8px;display:none"></div>
-    </div>
-
-    <!-- Bot Selector for Form Capture (advanced, collapsible) -->
-    <div class="card" style="border-color:rgba(191,90,242,.3)">
-      <div onclick="laToggleAdvanced()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
-        <div class="st" style="color:var(--p)">&#9881;&#65039; ADVANCED — Form Capture &amp; Bot Selector</div>
-        <span id="la-adv-arrow" style="color:var(--p);font-size:16px">&#9660;</span>
-      </div>
-      <div id="la-advanced-section" style="display:none;margin-top:12px">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-          <div style="font-size:12px;color:var(--td)">&#129302; Form Capture ke liye bot assign karo:</div>
-          <button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)" onclick="laSelectBot()">&#128257; Bot Select Karo</button>
-        </div>
-        <div id="la-bot-info" style="background:var(--s2);border:1px solid rgba(191,90,242,.25);border-radius:8px;padding:10px;font-family:'Share Tech Mono';font-size:12px;margin-bottom:10px">
-          <span style="color:var(--td)">Loading...</span>
-        </div>
-        <div style="background:rgba(255,214,10,.06);border:1px solid rgba(255,214,10,.2);border-radius:7px;padding:8px 10px;font-size:11px;color:var(--y)">
-          &#9888;&#65039; <b>Webhook URL</b> (website form ke liye):<br>
-          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
-            <code id="la-webhook-url" style="background:var(--s2);border:1px solid var(--b);padding:5px 9px;border-radius:5px;font-size:10px;color:var(--c);word-break:break-all;flex:1">—</code>
-            <button class="btn bg bsm" onclick="laCopyWebhook()" style="white-space:nowrap">&#128203; Copy</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bot Selector Modal -->
-    <div id="la-bot-select-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.75);align-items:center;justify-content:center">
-      <div style="background:var(--s);border:1px solid rgba(191,90,242,.5);border-radius:14px;padding:20px;width:90%;max-width:420px;max-height:80vh;overflow-y:auto">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="st" style="color:var(--p)">&#129302; Bot Select Karo</div>
-          <button class="btn bd bsm" onclick="g('la-bot-select-modal').style.display='none'">&#10005;</button>
-        </div>
-        <p style="font-size:12px;color:var(--td);margin-bottom:12px">Form Capture ke liye ek bot select karo.</p>
-        <div id="la-bot-select-list" style="display:flex;flex-direction:column;gap:8px">
-          <div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading...</div>
-        </div>
-      </div>
-    </div>
-
-  </div>
 
 <?php endif ?>
 
@@ -6643,7 +6707,7 @@ function nav(id,btn){
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
   window.scrollTo({top:0,behavior:'instant'});
   document.documentElement.scrollTop=0;document.body.scrollTop=0;
-  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad};
+  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad};
   if(m[id])m[id]();
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
@@ -9057,501 +9121,4 @@ async function promoSendNow(){
   }
 }
 
-// ─── LINK AUTOMATION ────────────────────────────────────────────────────────
-let _laData = {enabled:false, rules:[]};
-
-function laRenderUI(){
-  const lbl = g('la-status-label');
-  const btn = g('la-toggle-btn');
-  if(lbl){ lbl.textContent = _laData.enabled ? 'ON' : 'OFF'; lbl.style.color = _laData.enabled ? 'var(--g)' : 'var(--td)'; }
-  if(btn){ btn.textContent = _laData.enabled ? 'Disable' : 'Enable'; btn.className = 'btn bsm ' + (_laData.enabled ? 'bd' : 'bg'); }
-  laRenderRules();
-}
-
-function laToggle(){
-  _laData.enabled = !_laData.enabled;
-  laRenderUI();
-  laSave(true);
-}
-
-function laAddRule(){
-  if(!_laData.rules) _laData.rules = [];
-  _laData.rules.push({
-    id: 'la_' + Date.now(),
-    label: 'New Rule',
-    url: '',
-    method: 'GET',
-    headers: '',
-    body: '',
-    response_path: '',
-    trigger: '',
-    trigger_mode: 'exact',
-    reply_template: '🔗 Response:\n{response}',
-    error_message: '⚠️ Error fetching response.',
-    enabled: true,
-    access_control: '',
-    timeout: 60,
-    use_browser: false,
-    browser_steps: [],
-    browser_result_var: 'result',
-    captcha_prompt: '🔐 Captcha solve karke reply karo:',
-    form_capture: false,
-    fc_submit_url: '',
-    fc_fields: '',
-    fc_success_msg: '✅ Form submit ho gaya!',
-    fc_headers: '',
-  });
-  laRenderRules();
-}
-
-function laApplyUidaiTemplate(tpl, bsContId){
-  const container = g(bsContId);
-  if(!container) return;
-  container.innerHTML = '';
-  const steps = {
-    verify: [
-      {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
-      {type:'open', value:'https://myaadhaar.uidai.gov.in/verifyAadhaar', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
-      {type:'screenshot', caption:'Aadhaar number filled', crop_x:'', crop_y:'', crop_w:'', crop_h:'', send_ss:false, delete_after:false},
-      {type:'ask_captcha', caption:'🔐 Neeche security code dikhta hai, woh reply karo:', crop_x:'300', crop_y:'280', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="securityCode"], input[placeholder*="security code"], input[placeholder*="Security Code"], #captcha, input[name="captcha"]', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], button.submit-btn, .verify-btn, .btn-verify, .btn-primary', stop_on_error:false},
-      {type:'wait_load', value:'networkidle', timeout:'25'},
-      {type:'screenshot', caption:'Verification result', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.verification-status, .result-msg, .success-message, mat-card, .ng-star-inserted h2, .alert, mat-dialog-content', var_name:'result'},
-    ],
-    status: [
-      {type:'set_var', var_name:'enrolment_id', value:'{query_arg}'},
-      {type:'open', value:'https://myaadhaar.uidai.gov.in/CheckAadhaarStatus', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', value:'{enrolment_id}'},
-      {type:'ask_captcha', caption:'🔐 Security code reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[placeholder*="Security"], #captcha, input[name="captcha"]', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], .submit-btn, .check-status-btn, .btn-primary'},
-      {type:'wait_load', value:'networkidle', timeout:'25'},
-      {type:'screenshot', caption:'Status result', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.status-result, .result-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
-    ],
-    lock: [
-      {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
-      {type:'open', value:'https://myaadhaar.uidai.gov.in/lock-unlock-uid', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
-      {type:'ask_captcha', caption:'🔐 Security captcha reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[name="captcha"], #captcha', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], .btn-primary, .send-otp-btn'},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'screenshot', caption:'OTP sent screen', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.otp-msg, .info-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
-    ],
-  };
-  (steps[tpl]||[]).forEach(s => laAddBrowserStep(bsContId, s));
-  toast('✅ UIDAI template load ho gaya! Steps adjust karo.', 'success');
-}
-
-function laDeleteRule(idx){
-  if(!confirm('Yeh rule delete karo?')) return;
-  _laData.rules.splice(idx, 1);
-  laRenderRules();
-}
-
-function laUpdateRule(idx, field, value){
-  if(_laData.rules[idx]) _laData.rules[idx][field] = value;
-}
-
-// ─── LA Browser Step Helpers ─────────────────────────────────────────────────
-const LA_BS_TYPES = {
-  open:{label:'🌐 Open URL',fields:[{k:'value',ph:'https://site.com',label:'URL'}]},
-  wait_load:{label:'⌚ Wait Load',fields:[{k:'value',ph:'networkidle',label:'State (networkidle/domcontentloaded/load)'},{k:'timeout',ph:'15',label:'Timeout(s)'}]},
-  click:{label:'👆 Click',fields:[{k:'selector',ph:'#btn or //button',label:'Selector'},{k:'x',ph:'X (optional)',label:'X'},{k:'y',ph:'Y (optional)',label:'Y'}]},
-  fill:{label:'⌨️ Fill Input',fields:[{k:'selector',ph:'#email',label:'Selector'},{k:'value',ph:'{query} or text',label:'Value'}]},
-  type_slow:{label:'⌨️ Type Slow',fields:[{k:'selector',ph:'#aadhaar-input',label:'Selector'},{k:'value',ph:'{query}',label:'Text'},{k:'delay_ms',ph:'80',label:'Delay(ms)'}]},
-  screenshot:{label:'📸 Screenshot',fields:[{k:'caption',ph:'Result',label:'Caption'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'}],checks:[{k:'send_ss',label:'Send to user'},{k:'delete_after',label:'Del after'}]},
-  ask_captcha:{label:'🔐 Ask Captcha (relay to bot)',fields:[{k:'caption',ph:'🔐 Reply with captcha:',label:'Prompt'},{k:'crop_x',ph:'X blank=full',label:'X'},{k:'crop_y',ph:'Y',label:'Y'},{k:'crop_w',ph:'W',label:'W'},{k:'crop_h',ph:'H',label:'H'},{k:'var_name',ph:'captcha',label:'Reply→var'}]},
-  wait:{label:'⏱ Wait',fields:[{k:'value',ph:'2',label:'Secs'}]},
-  wait_element:{label:'⌛ Wait Elem',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'timeout',ph:'10',label:'Timeout(s)'}]},
-  wait_url:{label:'⌛ Wait URL',fields:[{k:'value',ph:'dashboard',label:'URL contains'},{k:'timeout',ph:'15',label:'Timeout(s)'}]},
-  get_text:{label:'📋 Get Text→Var',fields:[{k:'selector',ph:'#result',label:'Selector'},{k:'var_name',ph:'result',label:'Save as'}]},
-  get_attr:{label:'🔗 Get Attr→Var',fields:[{k:'selector',ph:'a.link',label:'Selector'},{k:'attribute',ph:'href',label:'Attribute'},{k:'var_name',ph:'result',label:'Save as'}]},
-  js_eval:{label:'⚡ JS Eval→Var',fields:[{k:'value',ph:'document.title',label:'JS'},{k:'var_name',ph:'js_result',label:'Save as'}]},
-  scroll:{label:'↕️ Scroll',fields:[{k:'value',ph:'500',label:'Pixels'}]},
-  reload:{label:'🔄 Reload',fields:[]},
-  set_var:{label:'📦 Set Var',fields:[{k:'var_name',ph:'myvar',label:'Var name'},{k:'value',ph:'fixed or {other}',label:'Value'}]},
-  key:{label:'⌨️ Key Press',fields:[{k:'value',ph:'Enter Tab Escape',label:'Key'}]},
-  select:{label:'📋 Select Option',fields:[{k:'selector',ph:'select#lang',label:'Selector'},{k:'value',ph:'English',label:'Option'}]},
-  hover:{label:'🖱 Hover',fields:[{k:'selector',ph:'#menu',label:'Selector'}]},
-  double_click:{label:'👆👆 Double Click',fields:[{k:'selector',ph:'#item',label:'Selector'}]},
-  clear_field:{label:'🗑 Clear Field',fields:[{k:'selector',ph:'#input',label:'Selector'}]},
-  cookie_set:{label:'🍪 Set Cookie',fields:[{k:'name',ph:'session',label:'Name'},{k:'value',ph:'{token}',label:'Value'}]},
-  cookie_get:{label:'🍪 Get Cookie→Var',fields:[{k:'name',ph:'auth_token',label:'Name'},{k:'var_name',ph:'cookie_val',label:'Save as'}]},
-  iframe_switch:{label:'🖼 IFrame In',fields:[{k:'selector',ph:'iframe#frame1',label:'Selector'}]},
-  iframe_main:{label:'🖼 IFrame Out',fields:[]},
-  assert_text:{label:'✅ Assert Text',fields:[{k:'selector',ph:'#status',label:'Selector'},{k:'value',ph:'Success',label:'Expected text'}]},
-  upload_file:{label:'📁 Upload File',fields:[{k:'selector',ph:'input[type=file]',label:'Selector'},{k:'value',ph:'/path/to/file',label:'File path'}]},
-  drag_drop:{label:'↔️ Drag & Drop',fields:[{k:'selector',ph:'#draggable',label:'Source'},{k:'target',ph:'#target',label:'Target'}]},
-  raw:{label:'⚡ Raw Python',fields:[{k:'value',ph:'PAGE.evaluate("return document.title")',label:'Python code'}]},
-};
-
-function laBuildBsFields(def, data={}){
-  let h='';
-  for(const f of(def.fields||[])){
-    const v=(data[f.k]||'').toString().replace(/"/g,'&quot;');
-    h+=`<div style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:100px"><label style="font-size:9px;color:var(--td);font-family:'Share Tech Mono'">${f.label}</label><input type="text" class="fi la-bs-f-${f.k}" placeholder="${(f.ph||'').replace(/'/g,"&#39;")}" value="${v}" style="font-size:11px"></div>`;
-  }
-  for(const c of(def.checks||[])){
-    h+=`<div style="display:flex;align-items:center;gap:4px;padding-top:14px"><input type="checkbox" class="la-bs-f-${c.k}" ${data[c.k]?'checked':''}><label style="font-size:10px;color:var(--td)">${c.label}</label></div>`;
-  }
-  return h;
-}
-
-function laAddBrowserStep(containerId, data={}){
-  const stype = data.type||'open';
-  const def = LA_BS_TYPES[stype]||LA_BS_TYPES.open;
-  const d = document.createElement('div');
-  d.className = 'la-bstep-row';
-  d.style.cssText = 'background:var(--s3);border:1px solid rgba(191,90,242,.3);border-radius:7px;padding:9px;margin-bottom:5px';
-  d.innerHTML = `<div style="display:flex;align-items:center;gap:5px;margin-bottom:6px;flex-wrap:wrap">
-    <select class="fsel la-bs-type" onchange="onLaBsTypeChange(this)" style="flex:1;min-width:140px;font-size:11px">
-      ${Object.entries(LA_BS_TYPES).map(([k,v])=>`<option value="${k}" ${k===stype?'selected':''}>${v.label}</option>`).join('')}
-    </select>
-    <label style="font-size:10px;color:var(--r);display:flex;align-items:center;gap:3px;cursor:pointer"><input type="checkbox" class="la-bs-stop" ${data.stop_on_error?'checked':''}>stop on err</label>
-    <button class="btn bg bsm" onclick="const r=this.closest('.la-bstep-row');const p=r.previousElementSibling;if(p&&p.classList.contains('la-bstep-row'))r.parentNode.insertBefore(r,p)" style="padding:3px 7px">↑</button>
-    <button class="btn bg bsm" onclick="const r=this.closest('.la-bstep-row');const n=r.nextElementSibling;if(n&&n.classList.contains('la-bstep-row'))r.parentNode.insertBefore(n,r)" style="padding:3px 7px">↓</button>
-    <button class="btn bd bsm" onclick="this.closest('.la-bstep-row').remove()" style="padding:3px 7px">✕</button>
-  </div><div class="la-bs-fields" style="display:flex;flex-wrap:wrap;gap:6px">${laBuildBsFields(def,data)}</div>`;
-  const container = g(containerId);
-  if(container) container.appendChild(d);
-}
-
-function onLaBsTypeChange(sel){
-  const row = sel.closest('.la-bstep-row');
-  const def = LA_BS_TYPES[sel.value]||{fields:[],checks:[]};
-  row.querySelector('.la-bs-fields').innerHTML = laBuildBsFields(def);
-}
-
-function laGetBrowserSteps(containerId){
-  const steps = [];
-  const container = g(containerId);
-  if(!container) return steps;
-  container.querySelectorAll('.la-bstep-row').forEach(row => {
-    const stype = row.querySelector('.la-bs-type')?.value||'open';
-    const def = LA_BS_TYPES[stype]||{fields:[],checks:[]};
-    const s = {type:stype, stop_on_error: row.querySelector('.la-bs-stop')?.checked||false};
-    for(const f of(def.fields||[])){const el=row.querySelector('.la-bs-f-'+f.k);if(el)s[f.k]=el.value||'';}
-    for(const c of(def.checks||[])){const el=row.querySelector('.la-bs-f-'+c.k);if(el)s[c.k]=el.checked||false;}
-    steps.push(s);
-  });
-  return steps;
-}
-
-function laRenderRules(){
-  const container = g('la-rules-list');
-  if(!container) return;
-  const rules = _laData.rules || [];
-  if(!rules.length){
-    container.innerHTML = '<div style="text-align:center;color:var(--td);font-size:12px;padding:24px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.</div>';
-    return;
-  }
-  container.innerHTML = '';
-  rules.forEach((rule, idx) => {
-    const card = document.createElement('div');
-    card.style.cssText = 'background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:10px;overflow:hidden';
-    const safe = v => (v||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    const useBrowser = !!rule.use_browser;
-    const bsContId = 'la-bs-c-'+idx;
-    // Compact header bar
-    card.innerHTML =
-      // ── Header bar ──
-      '<div style="background:'+(rule.enabled?'rgba(0,245,255,.08)':'rgba(255,255,255,.03)')+';padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid rgba(0,245,255,.12)">' +
-        '<label style="display:flex;align-items:center;gap:5px;cursor:pointer">' +
-          '<input type="checkbox" '+(rule.enabled?'checked':'')+' onchange="laUpdateRule('+idx+',\'enabled\',this.checked);this.closest(\'[style*=overflow]\').querySelector(\'div\').style.background=this.checked?\'rgba(0,245,255,.08)\':\'rgba(255,255,255,.03)\'" style="accent-color:var(--g);width:14px;height:14px">' +
-          '<span style="font-size:12px;color:var(--t);font-weight:600">'+(rule.label||'Rule '+(idx+1))+'</span>' +
-        '</label>' +
-        '<span style="font-size:11px;color:var(--y);font-family:\'Share Tech Mono\';background:rgba(255,214,10,.1);border:1px solid rgba(255,214,10,.3);padding:1px 8px;border-radius:4px">trigger: '+(rule.trigger||'(empty)')+'</span>' +
-        '<div style="margin-left:auto;display:flex;gap:5px">' +
-          '<button class="btn bd bsm" onclick="laDeleteRule('+idx+')" style="padding:3px 10px">&#128465;</button>' +
-        '</div>' +
-      '</div>' +
-      // ── Body ──
-      '<div style="padding:12px 14px">' +
-        // Label + Trigger row
-        '<div class="fg mb">' +
-          '<div class="fgrp">' +
-            '<label class="fl">Name / Label</label>' +
-            '<input type="text" class="fi" value="'+safe(rule.label)+'" placeholder="My Rule" oninput="laUpdateRule('+idx+',\'label\',this.value);this.closest(\'[style*=overflow]\').querySelector(\'span[style*=font-weight]\').textContent=this.value||\'Rule '+(idx+1)+'\'">' +
-          '</div>' +
-          '<div class="fgrp">' +
-            '<label class="fl" style="color:var(--y)">&#9889; Trigger Keyword <span style="font-weight:normal;color:var(--td)">(user yahi type kare)</span></label>' +
-            '<input type="text" class="fi" value="'+safe(rule.trigger)+'" placeholder="aadhaar / verify / status" oninput="laUpdateRule('+idx+',\'trigger\',this.value);this.closest(\'[style*=overflow]\').querySelectorAll(\'span\')[1].textContent=\'trigger: \'+(this.value||\'(empty)\')" style="color:var(--y);border-color:rgba(255,214,10,.4)">' +
-          '</div>' +
-          '<div class="fgrp" style="flex:0.7;min-width:130px">' +
-            '<label class="fl">Trigger Mode</label>' +
-            '<select class="fsel" onchange="laUpdateRule('+idx+',\'trigger_mode\',this.value)">' +
-              ['exact','startswith','contains'].map(m=>'<option value="'+m+'"'+((rule.trigger_mode||'exact')===m?' selected':'')+'>'+m+'</option>').join('') +
-            '</select>' +
-          '</div>' +
-        '</div>' +
-        // URL + Method row (simple curl mode)
-        '<div id="la-curl-section-'+idx+'" style="display:'+(useBrowser?'none':'block')+'">' +
-          '<div class="fg mb">' +
-            '<div class="fgrp" style="flex:3">' +
-              '<label class="fl">&#127758; API URL <span style="color:var(--td);font-size:9px">({query} {tg_name} {tg_id} supported)</span></label>' +
-              '<input type="text" class="fi" value="'+safe(rule.url)+'" placeholder="https://api.example.com/data?q={query}" oninput="laUpdateRule('+idx+',\'url\',this.value)">' +
-            '</div>' +
-            '<div class="fgrp" style="flex:1;min-width:90px">' +
-              '<label class="fl">Method</label>' +
-              '<select class="fsel" onchange="laUpdateRule('+idx+',\'method\',this.value)">' +
-                ['GET','POST','PUT','DELETE'].map(m=>'<option value="'+m+'"'+(rule.method===m?' selected':'')+'>'+m+'</option>').join('') +
-              '</select>' +
-            '</div>' +
-          '</div>' +
-          // Optional advanced fields (collapsible)
-          '<details style="margin-bottom:10px">' +
-            '<summary style="font-size:11px;color:var(--td);cursor:pointer;padding:4px 0;font-family:\'Share Tech Mono\'">&#9881; Advanced (Headers / Body / Response Path)</summary>' +
-            '<div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">' +
-              '<div class="fgrp">' +
-                '<label class="fl">Headers (Key: Value per line)</label>' +
-                '<textarea class="fta" style="min-height:44px;font-size:11px" placeholder="Authorization: Bearer {MY_KEY}" oninput="laUpdateRule('+idx+',\'headers\',this.value)">'+safe(rule.headers)+'</textarea>' +
-              '</div>' +
-              '<div class="fgrp">' +
-                '<label class="fl">Body (POST/PUT ke liye)</label>' +
-                '<textarea class="fta" style="min-height:40px;font-size:11px" placeholder=\'{"q":"{query}"}\' oninput="laUpdateRule('+idx+',\'body\',this.value)">'+safe(rule.body)+'</textarea>' +
-              '</div>' +
-              '<div class="fgrp">' +
-                '<label class="fl">Response Path (blank=auto) e.g. data.price</label>' +
-                '<input type="text" class="fi" value="'+safe(rule.response_path)+'" placeholder="choices.0.message.content" oninput="laUpdateRule('+idx+',\'response_path\',this.value)">' +
-              '</div>' +
-            '</div>' +
-          '</details>' +
-          '<button class="btn bg bsm" onclick="laTestRule('+idx+')" style="font-size:11px;margin-bottom:8px">&#9889; Test URL</button>' +
-          '<div id="la-test-result-'+idx+'" style="margin-top:4px;display:none"></div>' +
-        '</div>' +
-        // Browser mode toggle
-        '<div style="background:rgba(191,90,242,.07);border:1px solid rgba(191,90,242,.2);border-radius:7px;padding:9px;margin-bottom:10px">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">' +
-            '<span style="font-size:11px;color:var(--p);font-family:\'Share Tech Mono\'">&#129302; Browser Mode (Playwright/Selenium)</span>' +
-            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
-              '<input type="checkbox" id="la-use-browser-'+idx+'" '+(useBrowser?'checked':'')+' onchange="laToggleBrowserMode('+idx+',this.checked)" style="accent-color:var(--p);width:14px;height:14px">' +
-              '<span style="font-size:11px;color:'+(useBrowser?'var(--p)':'var(--td)')+';font-family:\'Share Tech Mono\'">'+(useBrowser?'ON':'OFF')+'</span>' +
-            '</label>' +
-          '</div>' +
-          '<div id="la-browser-section-'+idx+'" style="display:'+(useBrowser?'block':'none')+';margin-top:8px">' +
-            '<div style="font-size:9px;color:var(--td);margin-bottom:6px">Browser steps (open, click, fill...). Blank = URL se direct open.</div>' +
-            '<div style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:4px">' +
-              '<span style="font-size:9px;color:var(--p);font-family:\'Share Tech Mono\';align-self:center">UIDAI Templates:</span>' +
-              '<button class="btn bsm" style="background:rgba(255,159,10,.15);border:1px solid rgba(255,159,10,.4);color:var(--o);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'verify\',\''+bsContId+'\')">🆔 Verify Aadhaar</button>' +
-              '<button class="btn bsm" style="background:rgba(57,255,20,.1);border:1px solid rgba(57,255,20,.3);color:var(--g);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'status\',\''+bsContId+'\')">📋 Aadhaar Status</button>' +
-              '<button class="btn bsm" style="background:rgba(0,245,255,.1);border:1px solid rgba(0,245,255,.3);color:var(--c);font-size:10px;padding:2px 8px" onclick="laApplyUidaiTemplate(\'lock\',\''+bsContId+'\')">🔒 Lock/Unlock UID</button>' +
-            '</div>' +
-            '<div id="'+bsContId+'" style="margin-bottom:6px"></div>' +
-            '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">' +
-              Object.entries(LA_BS_TYPES).map(([k,v])=>'<button class="btn bg bsm" onclick="laAddBrowserStep(\''+bsContId+'\',{type:\''+k+'\'})" style="font-size:10px;padding:2px 6px">'+v.label+'</button>').join('') +
-            '</div>' +
-            '<div class="fg">' +
-              '<div class="fgrp">' +
-                '<label class="fl">Result Var</label>' +
-                '<input type="text" class="fi" id="la-result-var-'+idx+'" value="'+safe(rule.browser_result_var||'result')+'" placeholder="result" oninput="laUpdateRule('+idx+',\'browser_result_var\',this.value)" style="font-size:11px">' +
-              '</div>' +
-              '<div class="fgrp">' +
-                '<label class="fl">Captcha Prompt</label>' +
-                '<input type="text" class="fi" id="la-captcha-prompt-'+idx+'" value="'+safe(rule.captcha_prompt||'🔐 Solve the captcha and reply:')+'" oninput="laUpdateRule('+idx+',\'captcha_prompt\',this.value)" style="font-size:11px">' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-        // Reply template
-        '<div class="fgrp mb">' +
-          '<label class="fl">&#128172; Reply Template — <code style="color:var(--y)">{response}</code> = API response</label>' +
-          '<textarea class="fta" style="min-height:58px" placeholder="&#128279; Result:\n{response}" oninput="laUpdateRule('+idx+',\'reply_template\',this.value)">'+safe(rule.reply_template)+'</textarea>' +
-        '</div>' +
-        '<div class="fgrp mb">' +
-          '<label class="fl">Error Message</label>' +
-          '<input type="text" class="fi" value="'+safe(rule.error_message)+'" placeholder="&#9888; Error!" oninput="laUpdateRule('+idx+',\'error_message\',this.value)">' +
-        '</div>' +
-        // Form Capture (advanced toggle)
-        '<details style="margin-top:4px">' +
-          '<summary style="font-size:11px;color:var(--o);cursor:pointer;padding:4px 0;font-family:\'Share Tech Mono\'">&#127760; Website Form Capture (advanced)</summary>' +
-          '<div style="margin-top:8px">' +
-            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">' +
-              '<input type="checkbox" id="la-fc-enabled-'+idx+'" '+(rule.form_capture?'checked':'')+' onchange="laToggleFormCapture('+idx+',this.checked)" style="accent-color:var(--o);width:14px;height:14px">' +
-              '<span style="font-size:11px;color:'+(rule.form_capture?'var(--o)':'var(--td)')+';font-family:\'Share Tech Mono\'">'+(rule.form_capture?'ENABLED':'DISABLED')+'</span>' +
-            '</label>' +
-            '<div id="la-fc-section-'+idx+'" style="display:'+(rule.form_capture?'flex':'none')+';flex-direction:column;gap:8px">' +
-              '<div class="fgrp">' +
-                '<label class="fl">Submit URL</label>' +
-                '<input type="text" class="fi" id="la-fc-submit-'+idx+'" value="'+safe(rule.fc_submit_url||'')+'" placeholder="https://yoursite.com/submit" oninput="laUpdateRule('+idx+',\'fc_submit_url\',this.value)" style="font-size:11px">' +
-              '</div>' +
-              '<div class="fgrp">' +
-                '<label class="fl">Form Fields (field_name|Prompt message per line)</label>' +
-                '<textarea class="fta" id="la-fc-fields-'+idx+'" style="min-height:65px;font-size:11px" placeholder="name|Aapka naam?\nemail|Email address?" oninput="laUpdateRule('+idx+',\'fc_fields\',this.value)">'+safe(rule.fc_fields||'')+'</textarea>' +
-              '</div>' +
-              '<div class="fgrp">' +
-                '<label class="fl">Success Message</label>' +
-                '<input type="text" class="fi" id="la-fc-success-'+idx+'" value="'+safe(rule.fc_success_msg||'✅ Form submit ho gaya!')+'" oninput="laUpdateRule('+idx+',\'fc_success_msg\',this.value)" style="font-size:11px">' +
-              '</div>' +
-            '</div>' +
-          '</div>' +
-        '</details>' +
-      '</div>';
-    container.appendChild(card);
-    if(useBrowser && rule.browser_steps && rule.browser_steps.length){
-      rule.browser_steps.forEach(step => laAddBrowserStep(bsContId, step));
-    }
-  });
-}
-
-function laToggleBrowserMode(idx, enabled){
-  laUpdateRule(idx, 'use_browser', enabled);
-  const bsSection = g('la-browser-section-'+idx);
-  const curlSection = g('la-curl-section-'+idx);
-  const lbl = document.querySelector('#la-use-browser-'+idx+' ~ span');
-  if(bsSection) bsSection.style.display = enabled ? 'block' : 'none';
-  if(curlSection) curlSection.style.display = enabled ? 'none' : 'block';
-  if(lbl){ lbl.textContent = enabled ? 'ON' : 'OFF'; lbl.style.color = enabled ? 'var(--p)' : 'var(--td)'; }
-}
-
-function laToggleFormCapture(idx, enabled){
-  laUpdateRule(idx, 'form_capture', enabled);
-  const sec = g('la-fc-section-'+idx);
-  const lbl = document.querySelector('#la-fc-enabled-'+idx+' ~ span');
-  if(sec) sec.style.display = enabled ? 'flex' : 'none';
-  if(lbl){ lbl.textContent = enabled ? 'ENABLED' : 'DISABLED'; lbl.style.color = enabled ? 'var(--o)' : 'var(--td)'; }
-}
-
-function laToggleAdvanced(){
-  const sec = g('la-advanced-section');
-  const arr = g('la-adv-arrow');
-  if(!sec) return;
-  const open = sec.style.display !== 'none';
-  sec.style.display = open ? 'none' : 'block';
-  if(arr) arr.innerHTML = open ? '&#9660;' : '&#9650;';
-}
-
-// ─── LA Bot Selector ─────────────────────────────────────────────────────────
-let _laBotId = '';
-
-async function laLoad(){
-  const r = await api('get_link_automation');
-  if(!r.ok) return;
-  _laData = r.data || _laData;
-  _laBotId = r.la_bot_id || '';
-  laRenderUI();
-  laRenderBotInfo();
-}
-
-function laRenderBotInfo(){
-  const infoEl = g('la-bot-info');
-  const wuEl = g('la-webhook-url');
-  if(!infoEl) return;
-  if(!_laBotId){
-    infoEl.innerHTML = '<span style="color:var(--r)">&#10060; Koi bot assign nahi hai — &quot;Change Bot&quot; click karke bot select karo.</span>';
-    if(wuEl) wuEl.textContent = '—';
-    return;
-  }
-  api('get_bots').then(r => {
-    if(!r.ok||!r.data) return;
-    const b = r.data.find(x=>x.id===_laBotId);
-    if(b){
-      infoEl.innerHTML = '<span style="color:var(--g)">&#9989; </span><b style="color:var(--t)">'+b.name+'</b> <span style="color:var(--c)">@'+(b.username||'?')+'</span> <span style="color:var(--td);font-size:10px">ID: '+b.id+'</span>';
-    } else {
-      infoEl.innerHTML = '<span style="color:var(--y)">&#9888;&#65039; Bot ID: '+_laBotId+' (panel me nahi mila — shayad delete ho gaya)</span>';
-    }
-  });
-  if(wuEl){
-    const base = location.origin + location.pathname;
-    wuEl.textContent = base + '?la_webhook=' + encodeURIComponent(_laBotId);
-  }
-}
-
-function laCopyWebhook(){
-  const wuEl = g('la-webhook-url');
-  if(!wuEl||wuEl.textContent==='—') return;
-  navigator.clipboard.writeText(wuEl.textContent).then(()=>toast('✅ Webhook URL copied!','success')).catch(()=>{
-    const ta=document.createElement('textarea');ta.value=wuEl.textContent;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('✅ Copied!','success');
-  });
-}
-
-async function laSelectBot(){
-  const modal = g('la-bot-select-modal');
-  const listEl = g('la-bot-select-list');
-  modal.style.display='flex';
-  listEl.innerHTML='<div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading...</div>';
-  const r = await api('get_bots');
-  if(!r.ok||!r.data||!r.data.length){
-    listEl.innerHTML='<div style="color:var(--r);text-align:center;padding:12px;font-size:12px">Koi bot nahi mila. Pehle bot add karo.</div>';
-    return;
-  }
-  listEl.innerHTML='';
-  r.data.forEach(b=>{
-    const isSelected = b.id===_laBotId;
-    const div=document.createElement('div');
-    div.style.cssText='background:var(--s2);border:1px solid '+(isSelected?'rgba(191,90,242,.6)':'var(--b)')+';border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer';
-    div.innerHTML=`<div><b style="color:var(--t)">${b.name}</b> <span style="font-size:11px;color:var(--c)">@${b.username||'?'}</span>${isSelected?'<span style="margin-left:8px;background:rgba(191,90,242,.2);color:var(--p);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">SELECTED</span>':''}</div><button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)">Select</button>`;
-    div.querySelector('button').onclick=async()=>{
-      const sr=await api('set_la_bot',{la_bot_id:b.id});
-      if(sr.ok){_laBotId=b.id;modal.style.display='none';laRenderBotInfo();toast('✅ Bot set: '+b.name,'success');}
-      else toast('Error: '+(sr.error||''),'error');
-    };
-    listEl.appendChild(div);
-  });
-}
-
-async function laTestRule(idx){
-  const rule = _laData.rules[idx];
-  if(!rule) return;
-  const res = g('la-test-result-'+idx);
-  if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--y);font-family:\'Share Tech Mono\';font-size:11px">Testing...</div>'; }
-  const r = await api('test_link_automation', {
-    url: rule.url,
-    method: rule.method||'GET',
-    headers: rule.headers||'',
-    body: rule.body||'',
-    response_path: rule.response_path||'',
-    timeout: rule.timeout||30,
-  });
-  if(!res) return;
-  res.style.display='block';
-  if(r.ok){
-    const codeBadge = r.http_code < 400
-      ? '<span style="background:rgba(57,255,20,.2);color:var(--g);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">HTTP '+r.http_code+'</span>'
-      : '<span style="background:rgba(255,45,85,.2);color:var(--r);font-family:\'Share Tech Mono\';font-size:10px;padding:2px 7px;border-radius:4px">HTTP '+r.http_code+'</span>';
-    const escExtracted = (r.extracted||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    const escRaw = (r.raw_body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    res.innerHTML =
-      '<div style="background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px;font-size:11px">' +
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">' + codeBadge + '<span style="color:var(--g);font-family:\'Share Tech Mono\';font-size:10px">&#9989; Response received</span></div>' +
-        '<div style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--y);margin-bottom:4px">Extracted Value:</div>' +
-        '<div style="background:var(--s2);border:1px solid var(--b);border-radius:5px;padding:7px;color:var(--g);font-family:\'Share Tech Mono\';font-size:11px;white-space:pre-wrap;max-height:120px;overflow-y:auto">' + escExtracted + '</div>' +
-        '<details style="margin-top:7px"><summary style="font-size:10px;color:var(--td);cursor:pointer;font-family:\'Share Tech Mono\'">Raw Response (click to expand)</summary><div style="background:var(--s2);border-radius:5px;padding:7px;color:var(--td);font-family:\'Share Tech Mono\';font-size:10px;white-space:pre-wrap;max-height:150px;overflow-y:auto;margin-top:5px">' + escRaw + '</div></details>' +
-      '</div>';
-  } else {
-    res.innerHTML = '<div style="background:rgba(255,45,85,.08);border:1px solid rgba(255,45,85,.3);border-radius:8px;padding:10px;color:var(--r);font-family:\'Share Tech Mono\';font-size:11px">&#10060; ' + (r.error||'Unknown error') + '</div>';
-  }
-}
-
-async function laSave(silent=false){
-  // Collect browser_steps and form_capture fields from DOM for each rule before saving
-  const rules = (_laData.rules||[]).map((rule, idx) => {
-    const bsContId = 'la-bs-c-'+idx;
-    const steps = laGetBrowserSteps(bsContId);
-    return {...rule, browser_steps: steps};
-  });
-  const d = {enabled: _laData.enabled, rules, la_bot_id: _laBotId};
-  const r = await api('save_link_automation', {link_automation: d});
-  const res = g('la-save-result');
-  if(r.ok){
-    _laData = {..._laData, ...d};
-    if(!silent){ toast('Link Automation settings save ho gayi!', 'success'); }
-    if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--g);font-family:\'Share Tech Mono\';font-size:12px">&#9989; Saved! '+r.count+' rule(s) active.</div>'; }
-    laRenderUI();
-  } else {
-    toast('Save failed: '+(r.error||''), 'error');
-    if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--r);font-family:\'Share Tech Mono\';font-size:12px">&#10060; '+(r.error||'Unknown error')+'</div>'; }
-  }
-}
 </script></body></html>
