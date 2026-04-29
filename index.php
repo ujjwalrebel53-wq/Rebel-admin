@@ -3653,6 +3653,24 @@ if(isset($_GET['webhook_bot'])){
                 http_response_code(200);exit;
             }
 
+            // ── /fetch {mobile} {Full Name} ──────────────────────────────────
+            if($cmdStr==='fetch'){
+                $args=array_values(array_filter(explode(' ',trim($query))));
+                $mobile=trim($args[0]??'');
+                array_shift($args);
+                $fullName=trim(implode(' ',$args));
+                if($mobile===''||!preg_match('/^\d{10}$/',$mobile)){
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Wrong format!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>\n\n📱 Pehle 10-digit mobile number\n👤 Phir poora naam (spaces ke saath)",'parse_mode'=>'HTML'],$token);
+                    http_response_code(200);exit;
+                }
+                if($fullName===''){
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name nahi diya!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>",'parse_mode'=>'HTML'],$token);
+                    http_response_code(200);exit;
+                }
+                execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile,$fullName);
+                http_response_code(200);exit;
+            }
+
             if($cmdStr==='start'){
                 if(!empty($u['active_page'])){
                     $u['active_page']='';
@@ -3738,25 +3756,6 @@ if(isset($_GET['webhook_bot'])){
                 }
                 http_response_code(200);exit;
             }
-            http_response_code(200);exit;
-        }
-
-        // ── /fetch {mobile} {Full Name} ──────────────────────────────────────────
-        if($cmdStr==='fetch'){
-            $args=array_values(array_filter(explode(' ',trim($query))));
-            $mobile=trim($args[0]??'');
-            // Rest of args = full name (can have spaces)
-            array_shift($args);
-            $fullName=trim(implode(' ',$args));
-            if($mobile===''||!preg_match('/^\d{10}$/',$mobile)){
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Wrong format!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>\n\n📱 Pehle 10-digit mobile number\n👤 Phir poora naam (spaces ke saath)","parse_mode"=>"HTML"],$token);
-                http_response_code(200);exit;
-            }
-            if($fullName===''){
-                tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name nahi diya!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>","parse_mode"=>"HTML"],$token);
-                http_response_code(200);exit;
-            }
-            execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile,$fullName);
             http_response_code(200);exit;
         }
 
