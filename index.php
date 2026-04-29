@@ -2,6 +2,7 @@
 
 if (!function_exists('str_starts_with')) { function str_starts_with($h,$n){return(string)$n!==''&&strncmp($h,$n,strlen($n))===0;} }
 if (!function_exists('str_ends_with'))   { function str_ends_with($h,$n){return $n!==''&&substr($h,-strlen($n))===(string)$n;} }
+if (!function_exists('str_contains'))    { function str_contains($h,$n){return $n===''||strpos($h,$n)!==false;} }
 function isAssoc($a){if(!is_array($a)||empty($a))return false;return array_keys($a)!==range(0,count($a)-1);}
 
 // ─── Security Headers ───────────────────────────────────────────────────────
@@ -23,6 +24,76 @@ define('TG_TO',20);
 define('RATE_LIMIT_FILE',__DIR__.'/.rate_limits.json');
 define('CSRF_TOKEN_NAME','_csrf');
 if(!is_dir(BOTS_DIR))@mkdir(BOTS_DIR,0755,true);
+
+// ─── Python binary detection (alwaysdata uses 'python' not 'python3') ────────
+function getPythonBin():string{
+    // Check env override first (set REBEL_PYTHON_BIN in your environment or create .python_bin file)
+    $env=getenv('REBEL_PYTHON_BIN');
+    if($env&&trim($env)!=='')return trim($env);
+    // Config file override: create .python_bin file with path e.g. /usr/bin/python3.11
+    $cfgFile=__DIR__.'/.python_bin';
+    if(file_exists($cfgFile)){$p=trim(file_get_contents($cfgFile));if($p!=='')return $p;}
+    // Auto-detect via file_exists for common paths (no exec needed)
+    $paths=['/usr/bin/python3','/usr/bin/python','/usr/local/bin/python3','/usr/local/bin/python',
+            '/usr/alwaysdata/python/3.12/bin/python3','/usr/alwaysdata/python/3.11/bin/python3',
+            '/usr/alwaysdata/python/3.10/bin/python3','/home/'.get_current_user().'/.local/bin/python3'];
+    foreach($paths as $p){if(file_exists($p)&&is_executable($p))return $p;}
+    // Try exec-based detection as last resort
+    if(function_exists('exec')){
+        foreach(['python3','python','python3.12','python3.11','python3.10'] as $bin){
+            $out=[];$ret=1;
+            @exec('which '.escapeshellarg($bin).' 2>/dev/null',$out,$ret);
+            if($ret===0&&!empty($out)&&trim($out[0])!=='')return trim($out[0]);
+        }
+    }
+    return 'python3';
+}
+define('PYTHON_BIN',getPythonBin());
+
+// ─── Safe exec wrapper: works even if exec() is in disable_functions ─────────
+function runPythonScript(string $scrFile, int $timeout=120):void{
+    // Extend PHP execution time to allow the script to finish
+    @set_time_limit(max(120,$timeout+30));
+
+    // Method 1: proc_open (most reliable, supports timeout monitoring)
+    if(function_exists('proc_open')&&!in_array('proc_open',array_map('trim',explode(',',ini_get('disable_functions'))))){
+        $desc=[['pipe','r'],['pipe','w'],['pipe','w']];
+        $cmd=PYTHON_BIN.' '.escapeshellarg($scrFile);
+        $proc=@proc_open($cmd,$desc,$pipes);
+        if($proc){
+            fclose($pipes[0]);
+            stream_set_blocking($pipes[1],false);
+            stream_set_blocking($pipes[2],false);
+            $start=time();
+            while(true){
+                $status=proc_get_status($proc);
+                if(!$status['running'])break;
+                if(time()-$start>=$timeout){proc_terminate($proc,9);break;}
+                usleep(200000);
+            }
+            fclose($pipes[1]);fclose($pipes[2]);proc_close($proc);
+            return;
+        }
+    }
+    // Method 2: exec foreground (no & — waits for completion)
+    if(function_exists('exec')&&!in_array('exec',array_map('trim',explode(',',ini_get('disable_functions'))))){
+        $out=[];$ret=0;
+        @exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null',$out,$ret);
+        return;
+    }
+    // Method 3: shell_exec (synchronous)
+    if(function_exists('shell_exec')&&!in_array('shell_exec',array_map('trim',explode(',',ini_get('disable_functions'))))){
+        @shell_exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');
+        return;
+    }
+    // Method 4: system (synchronous)
+    if(function_exists('system')&&!in_array('system',array_map('trim',explode(',',ini_get('disable_functions'))))){
+        @system(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');
+        return;
+    }
+    // If all methods fail, log it — browser automation won't work on this host
+    error_log('REBEL: All exec methods disabled. Browser automation unavailable. Set REBEL_PYTHON_BIN env or enable exec/proc_open in php.ini.');
+}
 
 // ─── Login Rate Limiting (brute-force protection) ───────────────────────────
 function getRateLimits(){
@@ -739,6 +810,11 @@ function buildBrowserScript(array $steps,array $vars,string $sessFile,string $re
     $rf =addslashes($resFile);
     return <<<PY
 import sys,json,os,base64,time,random,re,tempfile
+# Ensure ~/.local packages (pip install --user) are in path (required on AlwaysData and many shared hosts)
+_home=os.path.expanduser('~')
+for _sp in [os.path.join(_home,'.local','lib','python'+'.'.join(map(str,sys.version_info[:2])),'site-packages'),
+            os.path.join(_home,'.local','lib','python'+str(sys.version_info[0]),'site-packages')]:
+    if _sp not in sys.path and os.path.isdir(_sp): sys.path.insert(0,_sp)
 SF='{$sf}'; RF='{$rf}'
 R={'steps':[],'status':'done','vars':{}}
 V={$vJ}
@@ -1067,7 +1143,7 @@ function execBrowser($botId,$chatId,$msgId,$u,&$db,$s,$query,$p,$token,$extraVar
     $lr=tg('sendMessage',['chat_id'=>$chatId,'text'=>$lmsg,'parse_mode'=>'HTML'],$token);
     $lmid=$lr['result']['message_id']??null;
     $timeout=max(30,(int)($p['api_timeout']??120));
-    exec('timeout '.escapeshellarg($timeout).' python3 '.escapeshellarg($scrFile).' 2>/dev/null');
+    runPythonScript($scrFile,$timeout);
     @unlink($scrFile);
     $res=file_exists($resFile)?json_decode(file_get_contents($resFile),true):null;
     if($lmid)tg('deleteMessage',['chat_id'=>$chatId,'message_id'=>$lmid],$token);
@@ -1401,7 +1477,7 @@ function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$tok
     file_put_contents($scrFile,$script);
 
     $timeout=max(30,min(300,(int)($rule['timeout']??60)));
-    exec('timeout '.escapeshellarg($timeout).' python3 '.escapeshellarg($scrFile).' 2>/dev/null');
+    runPythonScript($scrFile,$timeout);
     @unlink($scrFile);
 
     $res=file_exists($resFile)?json_decode(file_get_contents($resFile),true):null;
@@ -3894,6 +3970,33 @@ if($page==='api'){
             }break;
         case 'get_logs':jout(['ok'=>true,'data'=>loadLogs($actId)]);break;
 
+        case 'get_diag':
+            $diag=[];
+            $diag['php_version']=PHP_VERSION;
+            $diag['python_bin']=PYTHON_BIN;
+            $diag['exec_available']=function_exists('exec')&&!in_array('exec',array_map('trim',explode(',',ini_get('disable_functions'))));
+            $diag['proc_open_available']=function_exists('proc_open')&&!in_array('proc_open',array_map('trim',explode(',',ini_get('disable_functions'))));
+            $diag['shell_exec_available']=function_exists('shell_exec')&&!in_array('shell_exec',array_map('trim',explode(',',ini_get('disable_functions'))));
+            $diag['disable_functions']=ini_get('disable_functions');
+            $diag['tmpdir']=sys_get_temp_dir();
+            $diag['tmp_writable']=is_writable(sys_get_temp_dir());
+            $diag['bots_dir_writable']=is_writable(BOTS_DIR);
+            // Python check
+            $pyOut=[];$pyRet=1;
+            if($diag['exec_available']){@exec(PYTHON_BIN.' --version 2>&1',$pyOut,$pyRet);}
+            $diag['python_version']=$pyRet===0?implode(' ',$pyOut):'N/A (exec disabled or python not found)';
+            // Playwright check
+            $pwOut=[];$pwRet=1;
+            if($diag['exec_available']){@exec(PYTHON_BIN.' -c "import playwright;print(playwright.__version__)" 2>&1',$pwOut,$pwRet);}
+            $diag['playwright']=($pwRet===0)?implode('',$pwOut):'not installed';
+            // Selenium check
+            $seOut=[];$seRet=1;
+            if($diag['exec_available']){@exec(PYTHON_BIN.' -c "import selenium;print(selenium.__version__)" 2>&1',$seOut,$seRet);}
+            $diag['selenium']=($seRet===0)?implode('',$seOut):'not installed';
+            $diag['max_execution_time']=ini_get('max_execution_time');
+            $diag['memory_limit']=ini_get('memory_limit');
+            jout(['ok'=>true,'data'=>$diag]);break;
+
         case 'get_prem_emojis':
             $lib=loadPremEmojis($actId);
             foreach($lib as &$e){
@@ -4527,6 +4630,10 @@ td{padding:9px 11px;vertical-align:middle;}
     </div>
 
     <div class="card"><div class="sh"><div class="st">📋 LIVE LOGS</div><button class="btn bg bsm" onclick="loadLogs()">🔄</button></div><div class="log-t" id="logB"><div style="color:var(--tf)">Loading...</div></div></div>
+
+    <div class="card"><div class="sh"><div class="st">🔧 SYSTEM DIAGNOSTICS</div><button class="btn bg bsm" onclick="loadDiag()">🔄 Check</button></div>
+      <div id="diag-body" style="font-family:'Share Tech Mono';font-size:11px;color:var(--td);padding:4px">Click "Check" to run diagnostics...</div>
+    </div>
   </div>
 
   <!-- BOT CONFIG -->
@@ -4541,6 +4648,38 @@ td{padding:9px 11px;vertical-align:middle;}
 
       <div class="fgrp" style="max-width:280px;margin-bottom:13px"><label class="fl">👑 Master Admin Telegram ID</label><input type="text" id="g-adminid" class="fi" placeholder="Your Telegram numeric ID"></div>
       <button class="btn bp" onclick="saveCfg()">💾 Save Config</button>
+    </div>
+
+    <!-- ALWAYSDATA / HOSTING SETUP GUIDE -->
+    <div class="card" style="border-color:rgba(255,159,10,.35)">
+      <div class="sh"><div class="st" style="color:var(--o)">🖥️ HOSTING SETUP (AlwaysData / Shared Hosting)</div><button class="btn bg bsm" onclick="loadDiag();showPanel('p-dash')" style="font-size:10px">🔧 Run Diagnostics</button></div>
+      <details>
+        <summary style="font-size:12px;color:var(--o);cursor:pointer;padding:4px 0;font-family:'Share Tech Mono'">AlwaysData pe setup kaise karo — click to expand</summary>
+        <div style="font-size:12px;color:var(--td);margin-top:10px;line-height:1.9">
+          <b style="color:var(--c)">Step 1 — Python packages install karo (SSH se):</b><br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">pip install playwright selenium</code>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">playwright install chromium</code>
+          <br>
+          <b style="color:var(--c)">Step 2 — Python binary path set karo:</b><br>
+          Root folder mein <code style="color:var(--y)">.python_bin</code> file banao, andar sirf path likhao:<br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">/usr/bin/python3</code>
+          (AlwaysData pe: <code style="color:var(--y)">/usr/alwaysdata/python/3.12/bin/python3</code>)<br>
+          Ya environment variable set karo: <code style="color:var(--y)">REBEL_PYTHON_BIN</code><br>
+          <br>
+          <b style="color:var(--c)">Step 3 — PHP max_execution_time badhao:</b><br>
+          Root mein <code style="color:var(--y)">.user.ini</code> file banao:<br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">max_execution_time = 180<br>memory_limit = 512M</code>
+          <br>
+          <b style="color:var(--c)">Step 4 — Agar browser automation kaam na kare:</b><br>
+          AlwaysData shared hosting pe headless Chromium run nahi hota.<br>
+          <span style="color:var(--r)">Browser automation (Playwright/Selenium) sirf VPS/dedicated server pe kaam karta hai.</span><br>
+          Link Automation ke liye <b style="color:var(--g)">Curl mode</b> (Browser Mode OFF) use karo jo shared hosting pe kaam karta hai.<br>
+          <br>
+          <b style="color:var(--c)">Step 5 — exec() disabled hai to:</b><br>
+          AlwaysData Admin Panel → PHP → disable_functions se <code style="color:var(--y)">exec,proc_open,shell_exec</code> hatao.<br>
+          Ya support se request karo.
+        </div>
+      </details>
     </div>
 
     <!-- SECURITY SETTINGS -->
@@ -6469,6 +6608,40 @@ async function startBot(){const r=await api('start_bot');if(r.ok){toast('✅ Sta
 async function stopBot(){const r=await api('stop_bot');if(r.ok){toast('Stopped','info');checkBot();}}
 async function loadDash(){const r=await api('get_stats');if(r.ok&&r.data){g('st-u').textContent=r.data.users;g('st-s').textContent=r.data.searches;g('st-k').textContent=r.data.keys;}}
 async function loadLogs(){const r=await api('get_logs');const b=g('logB');if(r.ok&&r.data&&r.data.length){b.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');}else b.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';}
+
+async function loadDiag(){
+  const b=g('diag-body');
+  b.innerHTML='<div style="color:var(--y)">Checking...</div>';
+  const r=await api('get_diag');
+  if(!r.ok){b.innerHTML='<div style="color:var(--r)">Error loading diagnostics</div>';return;}
+  const d=r.data;
+  const ok=v=>`<span style="color:var(--g)">✅ ${v}</span>`;
+  const warn=v=>`<span style="color:var(--y)">⚠️ ${v}</span>`;
+  const err=v=>`<span style="color:var(--r)">❌ ${v}</span>`;
+  const rows=[
+    ['PHP Version', d.php_version, d.php_version>='8.0'?ok(d.php_version):warn(d.php_version+' (PHP 8.0+ recommended)')],
+    ['Python Binary', d.python_bin, d.python_version!=='N/A (exec disabled or python not found)'?ok(d.python_bin):err(d.python_bin+' (not found or exec disabled)')],
+    ['Python Version', '', d.python_version.includes('N/A')?err(d.python_version):ok(d.python_version)],
+    ['exec() available', '', d.exec_available?ok('Yes'):err('No — browser automation will NOT work')],
+    ['proc_open() available', '', d.proc_open_available?ok('Yes'):warn('No (fallback to exec)')],
+    ['shell_exec() available', '', d.shell_exec_available?ok('Yes'):warn('No (fallback available)')],
+    ['Playwright', '', d.playwright!=='not installed'?ok('v'+d.playwright):warn('Not installed — run: pip install playwright && playwright install chromium')],
+    ['Selenium', '', d.selenium!=='not installed'?ok('v'+d.selenium):warn('Not installed — run: pip install selenium')],
+    ['Temp dir writable', d.tmpdir, d.tmp_writable?ok('Yes'):err('No — browser automation will fail')],
+    ['Bots dir writable', '', d.bots_dir_writable?ok('Yes'):err('No — cannot save data')],
+    ['Max Execution Time', d.max_execution_time+'s', parseInt(d.max_execution_time)<60?warn(d.max_execution_time+'s (too low, set to 120 in php.ini)'):ok(d.max_execution_time+'s')],
+    ['Memory Limit', d.memory_limit, ok(d.memory_limit)],
+    ['Disabled Functions', '', d.disable_functions?warn(d.disable_functions):ok('None')],
+  ];
+  b.innerHTML='<table style="width:100%;border-collapse:collapse">'+rows.map(([k,v,s])=>`<tr><td style="color:var(--td);padding:3px 8px 3px 0;white-space:nowrap">${k}</td><td style="color:var(--tf);font-size:10px;padding:3px 8px 3px 0">${v||''}</td><td style="padding:3px 0">${s}</td></tr>`).join('')+'</table>'+
+    `<div style="margin-top:10px;padding:8px;background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:6px;color:var(--td);font-size:10px">
+      <b style="color:var(--c)">AlwaysData Setup Guide:</b><br>
+      1. SSH login: <code>pip install playwright selenium && playwright install chromium</code><br>
+      2. If exec() disabled: Contact AlwaysData support to enable it, or use curl-only link automation (no browser mode)<br>
+      3. Set python binary: Create <code>.python_bin</code> file in root with path, e.g. <code>/usr/bin/python3</code><br>
+      4. Set in php.ini: <code>max_execution_time = 180</code>
+    </div>`;
+}
 
 async function loadBots(){
   const r=await api('get_bots');const list=g('blist');list.innerHTML='';
