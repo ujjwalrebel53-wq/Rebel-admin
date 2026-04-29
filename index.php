@@ -3410,6 +3410,10 @@ if(isset($_GET['webhook_bot'])){
 // Bot asks user for each field, collects responses, submits back to fc_submit_url
 if(isset($_GET['la_webhook'])){
     header('Content-Type: application/json');
+    header('Access-Control-Allow-Origin: *');
+    header('Access-Control-Allow-Methods: POST, GET, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, Authorization');
+    if($_SERVER['REQUEST_METHOD']==='OPTIONS'){http_response_code(200);exit;}
     $laBotId=preg_replace('/[^a-zA-Z0-9_]/','_',$_GET['la_webhook']);
     $allBotsLa=loadBots();$laToken='';
     foreach($allBotsLa as $bLa){if($bLa['id']===$laBotId){$laToken=$bLa['token'];break;}}
@@ -4199,7 +4203,7 @@ if($page==='api'){
                     'headers'=>trim($rule['headers']??''),
                     'body'=>trim($rule['body']??''),
                     'response_path'=>trim($rule['response_path']??''),
-                    'trigger'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',trim($rule['trigger']??''))),
+                    'trigger'=>strtolower(trim($rule['trigger']??'')),
                     'reply_template'=>trim($rule['reply_template']??'{response}'),
                     'error_message'=>trim($rule['error_message']??'⚠️ Error fetching link response.'),
                     'enabled'=>(bool)($rule['enabled']??true),
@@ -6284,43 +6288,72 @@ td{padding:9px 11px;vertical-align:middle;}
 
   <!-- LINK AUTOMATION SECTION -->
   <div class="panel" id="p-linkautomation">
+
+    <!-- Header card -->
     <div class="card" style="border-color:rgba(0,245,255,.5);background:linear-gradient(135deg,rgba(0,245,255,.05),rgba(13,17,23,1))">
       <div class="sh">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:36px;height:36px;background:rgba(0,245,255,.15);border:2px solid rgba(0,245,255,.6);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px">&#128279;</div>
-          <div>
-            <div class="st" style="color:var(--c);font-size:13px">LINK AUTOMATION</div>
-            <div style="font-size:10px;color:var(--td);margin-top:1px">Kisi bhi URL ko trigger se automate karo — response bot me reflect hoga</div>
-          </div>
+        <div>
+          <div class="st" style="color:var(--c);font-size:14px">&#128279; LINK AUTOMATION</div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">User keyword bheje → bot URL fetch kare → response wapas bheje</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          <span id="la-status-label" style="font-family:'Share Tech Mono';font-size:11px;color:var(--td)">OFF</span>
-          <button id="la-toggle-btn" class="btn bsm bg" onclick="laToggle()" style="min-width:72px">Enable</button>
+          <span id="la-status-label" style="font-family:'Share Tech Mono';font-size:12px;color:var(--td);font-weight:700">OFF</span>
+          <button id="la-toggle-btn" class="btn bsm bg" onclick="laToggle()" style="min-width:80px;padding:7px 14px">Enable</button>
         </div>
       </div>
-      <p style="font-size:12px;color:var(--td);margin-bottom:0">Jab user koi specific keyword bheje, bot us linked URL ko fetch karega aur response wapas bhejega. GET/POST/curl sab support hai.</p>
+      <!-- Quick how-to -->
+      <div style="background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--td);line-height:1.8">
+        <b style="color:var(--c)">Kaise use kare:</b><br>
+        1&#65039;&#8423; Bot ka webhook Start karo (Dashboard &gt; Start Bot)<br>
+        2&#65039;&#8423; Enable button click karo (upar)<br>
+        3&#65039;&#8423; &quot;+ Add Rule&quot; click karo, Trigger keyword aur URL bharo<br>
+        4&#65039;&#8423; &quot;&#128190; Save All&quot; click karo<br>
+        5&#65039;&#8423; Telegram pe trigger keyword bhejo — bot reply karega!
+      </div>
     </div>
 
-    <!-- Bot Selector for Link Automation -->
-    <div class="card" style="border-color:rgba(191,90,242,.5);background:linear-gradient(135deg,rgba(191,90,242,.05),rgba(13,17,23,1))">
+    <!-- Rules Card -->
+    <div class="card" style="border-color:rgba(57,255,20,.35)">
       <div class="sh">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:32px;height:32px;background:rgba(191,90,242,.15);border:2px solid rgba(191,90,242,.6);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px">&#129302;</div>
-          <div>
-            <div class="st" style="color:var(--p);font-size:12px">&#129302; LINK AUTOMATION BOT</div>
-            <div style="font-size:10px;color:var(--td);margin-top:1px">Is bot me sirf Link Automation chalega — website form responses yahi bot forward karega</div>
-          </div>
+        <div>
+          <div class="st" style="color:var(--g)">&#128396; RULES</div>
+          <div style="font-size:11px;color:var(--td);margin-top:2px">Trigger = exact word jo user type kare (case insensitive)</div>
         </div>
-        <button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)" onclick="laSelectBot()">&#128257; Change Bot</button>
+        <button class="btn bsu bsm" onclick="laAddRule()" style="padding:7px 14px">+ Add Rule</button>
       </div>
-      <div id="la-bot-info" style="background:var(--s2);border:1px solid rgba(191,90,242,.25);border-radius:8px;padding:10px;font-family:'Share Tech Mono';font-size:12px">
-        <span style="color:var(--td)">Loading...</span>
+
+      <div id="la-rules-list" style="display:flex;flex-direction:column;gap:12px">
+        <div style="text-align:center;color:var(--td);font-size:12px;padding:24px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">
+          Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.
+        </div>
       </div>
-      <div style="margin-top:10px;background:rgba(255,214,10,.06);border:1px solid rgba(255,214,10,.2);border-radius:7px;padding:8px 10px;font-size:11px;color:var(--y)">
-        &#9888;&#65039; <b>Form Capture Webhook URL</b> — apni website me yeh URL add karo, bot user ke saath interact karega aur response site pe bhejega:<br>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
-          <code id="la-webhook-url" style="background:var(--s2);border:1px solid var(--b);padding:5px 9px;border-radius:5px;font-size:10px;color:var(--c);word-break:break-all;flex:1">—</code>
-          <button class="btn bg bsm" onclick="laCopyWebhook()" style="white-space:nowrap">&#128203; Copy</button>
+
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsu" onclick="laSave()" style="flex:1;padding:11px;font-size:14px">&#128190; Save All Rules</button>
+      </div>
+      <div id="la-save-result" style="margin-top:8px;display:none"></div>
+    </div>
+
+    <!-- Bot Selector for Form Capture (advanced, collapsible) -->
+    <div class="card" style="border-color:rgba(191,90,242,.3)">
+      <div onclick="laToggleAdvanced()" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none">
+        <div class="st" style="color:var(--p)">&#9881;&#65039; ADVANCED — Form Capture &amp; Bot Selector</div>
+        <span id="la-adv-arrow" style="color:var(--p);font-size:16px">&#9660;</span>
+      </div>
+      <div id="la-advanced-section" style="display:none;margin-top:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+          <div style="font-size:12px;color:var(--td)">&#129302; Form Capture ke liye bot assign karo:</div>
+          <button class="btn bsm" style="background:rgba(191,90,242,.2);border:1px solid rgba(191,90,242,.5);color:var(--p)" onclick="laSelectBot()">&#128257; Bot Select Karo</button>
+        </div>
+        <div id="la-bot-info" style="background:var(--s2);border:1px solid rgba(191,90,242,.25);border-radius:8px;padding:10px;font-family:'Share Tech Mono';font-size:12px;margin-bottom:10px">
+          <span style="color:var(--td)">Loading...</span>
+        </div>
+        <div style="background:rgba(255,214,10,.06);border:1px solid rgba(255,214,10,.2);border-radius:7px;padding:8px 10px;font-size:11px;color:var(--y)">
+          &#9888;&#65039; <b>Webhook URL</b> (website form ke liye):<br>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <code id="la-webhook-url" style="background:var(--s2);border:1px solid var(--b);padding:5px 9px;border-radius:5px;font-size:10px;color:var(--c);word-break:break-all;flex:1">—</code>
+            <button class="btn bg bsm" onclick="laCopyWebhook()" style="white-space:nowrap">&#128203; Copy</button>
+          </div>
         </div>
       </div>
     </div>
@@ -6329,47 +6362,16 @@ td{padding:9px 11px;vertical-align:middle;}
     <div id="la-bot-select-modal" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.75);align-items:center;justify-content:center">
       <div style="background:var(--s);border:1px solid rgba(191,90,242,.5);border-radius:14px;padding:20px;width:90%;max-width:420px;max-height:80vh;overflow-y:auto">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="st" style="color:var(--p)">&#129302; BOT SELECT KARO</div>
+          <div class="st" style="color:var(--p)">&#129302; Bot Select Karo</div>
           <button class="btn bd bsm" onclick="g('la-bot-select-modal').style.display='none'">&#10005;</button>
         </div>
-        <p style="font-size:12px;color:var(--td);margin-bottom:12px">Koi ek bot select karo — Link Automation sirf usi bot me chalega.</p>
+        <p style="font-size:12px;color:var(--td);margin-bottom:12px">Form Capture ke liye ek bot select karo.</p>
         <div id="la-bot-select-list" style="display:flex;flex-direction:column;gap:8px">
-          <div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading bots...</div>
+          <div style="color:var(--td);text-align:center;padding:12px;font-size:12px">Loading...</div>
         </div>
       </div>
     </div>
 
-    <div class="card" style="border-color:rgba(57,255,20,.35)">
-      <div class="sh">
-        <div class="st" style="color:var(--g)">&#128279; AUTOMATION RULES</div>
-        <button class="btn bsu bsm" onclick="laAddRule()">+ Add Rule</button>
-      </div>
-      <p style="font-size:12px;color:var(--td);margin-bottom:12px">Har rule ek trigger keyword + URL define karta hai. User woh keyword bheje to bot URL fetch karke response reply karega.</p>
-
-      <div style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:10px;margin-bottom:12px;font-family:'Share Tech Mono';font-size:10px;color:var(--td);line-height:2">
-        <span style="color:var(--c)">Available reply template vars:</span>
-        <code style="color:var(--y)">{response}</code> = fetched response &nbsp;
-        <code style="color:var(--y)">{tg_name}</code> = user name &nbsp;
-        <code style="color:var(--y)">{tg_id}</code> = user ID &nbsp;
-        <code style="color:var(--y)">{tg_username}</code> = @username &nbsp;
-        <code style="color:var(--y)">{query}</code> = trigger text &nbsp;
-        <code style="color:var(--y)">{field_name}</code> = any JSON field from response
-      </div>
-
-      <div id="la-rules-list" style="display:flex;flex-direction:column;gap:14px">
-        <div style="text-align:center;color:var(--td);font-size:12px;padding:20px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">
-          Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="border-color:rgba(0,245,255,.3)">
-      <div class="sh"><div class="st" style="color:var(--c)">&#9989; SAVE SETTINGS</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn bsu" onclick="laSave()" style="flex:1;min-width:150px;padding:11px">&#128190; Save All Rules</button>
-      </div>
-      <div id="la-save-result" style="margin-top:10px;display:none"></div>
-    </div>
   </div>
 
 <?php endif ?>
@@ -6385,6 +6387,8 @@ function nav(id,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
+  window.scrollTo({top:0,behavior:'instant'});
+  document.documentElement.scrollTop=0;document.body.scrollTop=0;
   const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad};
   if(m[id])m[id]();
 }
@@ -8765,13 +8769,6 @@ async function promoSendNow(){
 // ─── LINK AUTOMATION ────────────────────────────────────────────────────────
 let _laData = {enabled:false, rules:[]};
 
-async function laLoad(){
-  const r = await api('get_link_automation');
-  if(!r.ok) return;
-  _laData = r.data || _laData;
-  laRenderUI();
-}
-
 function laRenderUI(){
   const lbl = g('la-status-label');
   const btn = g('la-toggle-btn');
@@ -8901,150 +8898,139 @@ function laRenderRules(){
   if(!container) return;
   const rules = _laData.rules || [];
   if(!rules.length){
-    container.innerHTML = '<div style="text-align:center;color:var(--td);font-size:12px;padding:20px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.</div>';
+    container.innerHTML = '<div style="text-align:center;color:var(--td);font-size:12px;padding:24px;border:1px dashed rgba(255,255,255,.1);border-radius:8px">Koi rule nahi hai. &quot;+ Add Rule&quot; click karo.</div>';
     return;
   }
   container.innerHTML = '';
   rules.forEach((rule, idx) => {
     const card = document.createElement('div');
-    card.style.cssText = 'background:var(--s2);border:1px solid rgba(0,245,255,.25);border-radius:10px;padding:14px;position:relative';
+    card.style.cssText = 'background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:10px;overflow:hidden';
     const safe = v => (v||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const useBrowser = !!rule.use_browser;
     const bsContId = 'la-bs-c-'+idx;
+    // Compact header bar
     card.innerHTML =
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">' +
-        '<div style="display:flex;align-items:center;gap:8px">' +
-          '<span style="font-family:\'Share Tech Mono\';font-size:11px;color:var(--c);font-weight:700">&#128279; RULE ' + (idx+1) + '</span>' +
-          '<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:var(--td)">' +
-            '<input type="checkbox" ' + (rule.enabled?'checked':'') + ' onchange="laUpdateRule('+idx+',\'enabled\',this.checked)" style="accent-color:var(--g);width:13px;height:13px"> Enabled' +
-          '</label>' +
-        '</div>' +
-        '<button class="btn bd bsm" onclick="laDeleteRule(' + idx + ')" style="padding:3px 8px;font-size:11px">&#128465; Delete</button>' +
-      '</div>' +
-      '<div class="fg mb">' +
-        '<div class="fgrp">' +
-          '<label class="fl">Label (sirf apne liye)</label>' +
-          '<input type="text" class="fi" value="' + safe(rule.label) + '" placeholder="My API Rule" oninput="laUpdateRule('+idx+',\'label\',this.value)">' +
-        '</div>' +
-        '<div class="fgrp">' +
-          '<label class="fl">Trigger Keyword (user yahi bheje)</label>' +
-          '<input type="text" class="fi" value="' + safe(rule.trigger) + '" placeholder="price, weather, status..." oninput="laUpdateRule('+idx+',\'trigger\',this.value)" style="color:var(--y)">' +
+      // ── Header bar ──
+      '<div style="background:'+(rule.enabled?'rgba(0,245,255,.08)':'rgba(255,255,255,.03)')+';padding:10px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid rgba(0,245,255,.12)">' +
+        '<label style="display:flex;align-items:center;gap:5px;cursor:pointer">' +
+          '<input type="checkbox" '+(rule.enabled?'checked':'')+' onchange="laUpdateRule('+idx+',\'enabled\',this.checked);this.closest(\'[style*=overflow]\').querySelector(\'div\').style.background=this.checked?\'rgba(0,245,255,.08)\':\'rgba(255,255,255,.03)\'" style="accent-color:var(--g);width:14px;height:14px">' +
+          '<span style="font-size:12px;color:var(--t);font-weight:600">'+(rule.label||'Rule '+(idx+1))+'</span>' +
+        '</label>' +
+        '<span style="font-size:11px;color:var(--y);font-family:\'Share Tech Mono\';background:rgba(255,214,10,.1);border:1px solid rgba(255,214,10,.3);padding:1px 8px;border-radius:4px">trigger: '+(rule.trigger||'(empty)')+'</span>' +
+        '<div style="margin-left:auto;display:flex;gap:5px">' +
+          '<button class="btn bd bsm" onclick="laDeleteRule('+idx+')" style="padding:3px 10px">&#128465;</button>' +
         '</div>' +
       '</div>' +
-      // Browser mode toggle
-      '<div style="background:rgba(191,90,242,.07);border:1px solid rgba(191,90,242,.3);border-radius:8px;padding:10px;margin-bottom:10px">' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:' + (useBrowser?'10':'0') + 'px">' +
-          '<div style="display:flex;align-items:center;gap:8px">' +
-            '<span style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--p)">&#129302; BROWSER MODE</span>' +
-            '<span style="font-size:9px;color:var(--td)">Captcha bhi bot pe aayega</span>' +
-          '</div>' +
-          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
-            '<input type="checkbox" id="la-use-browser-'+idx+'" ' + (useBrowser?'checked':'') + ' onchange="laToggleBrowserMode('+idx+',this.checked)" style="accent-color:var(--p);width:14px;height:14px">' +
-            '<span style="font-size:11px;color:' + (useBrowser?'var(--p)':'var(--td)') + ';font-family:\'Share Tech Mono\'">' + (useBrowser?'ON':'OFF') + '</span>' +
-          '</label>' +
-        '</div>' +
-        // Browser steps section (shown only when use_browser=true)
-        '<div id="la-browser-section-'+idx+'" style="display:' + (useBrowser?'block':'none') + '">' +
-          '<div style="font-size:9px;color:var(--td);margin-bottom:6px">Steps: browser ko kya karna hai (open, click, fill, ask_captcha etc). Agar blank — URL field se direct open hoga.</div>' +
-          '<div id="' + bsContId + '" style="margin-bottom:6px"></div>' +
-          '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">' +
-            Object.entries(LA_BS_TYPES).map(([k,v])=>'<button class="btn bg bsm" onclick="laAddBrowserStep(\''+bsContId+'\',{type:\''+k+'\'})" style="font-size:10px;padding:3px 7px">'+v.label+'</button>').join('') +
-          '</div>' +
-          '<div class="fg">' +
-            '<div class="fgrp">' +
-              '<label class="fl">&#128300; Result Var (browser se result kahan store hua) e.g. <code>result</code></label>' +
-              '<input type="text" class="fi" id="la-result-var-'+idx+'" value="' + safe(rule.browser_result_var||'result') + '" placeholder="result" oninput="laUpdateRule('+idx+',\'browser_result_var\',this.value)" style="font-size:11px">' +
-            '</div>' +
-            '<div class="fgrp">' +
-              '<label class="fl">&#128274; Captcha Prompt (user ko bheja jaayega)</label>' +
-              '<input type="text" class="fi" id="la-captcha-prompt-'+idx+'" value="' + safe(rule.captcha_prompt||'🔐 Solve the captcha and reply:') + '" placeholder="&#128272; Solve the captcha and reply:" oninput="laUpdateRule('+idx+',\'captcha_prompt\',this.value)" style="font-size:11px">' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      // cURL section (shown only when use_browser=false)
-      '<div id="la-curl-section-'+idx+'" style="background:rgba(0,245,255,.04);border:1px solid rgba(0,245,255,.15);border-radius:8px;padding:11px;margin-bottom:10px;display:' + (useBrowser?'none':'block') + '">' +
-        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--c);margin-bottom:8px">&#127758; URL CONFIG</div>' +
+      // ── Body ──
+      '<div style="padding:12px 14px">' +
+        // Label + Trigger row
         '<div class="fg mb">' +
           '<div class="fgrp">' +
-            '<label class="fl">URL <span style="color:var(--td);font-size:9px">({query},{tg_name},{tg_id} vars supported)</span></label>' +
-            '<input type="text" class="fi" value="' + safe(rule.url) + '" placeholder="https://api.example.com/data?q={query}" oninput="laUpdateRule('+idx+',\'url\',this.value)">' +
+            '<label class="fl">Name / Label</label>' +
+            '<input type="text" class="fi" value="'+safe(rule.label)+'" placeholder="My Rule" oninput="laUpdateRule('+idx+',\'label\',this.value);this.closest(\'[style*=overflow]\').querySelector(\'span[style*=font-weight]\').textContent=this.value||\'Rule '+(idx+1)+'\'">' +
           '</div>' +
           '<div class="fgrp">' +
-            '<label class="fl">Method</label>' +
-            '<select class="fsel" onchange="laUpdateRule('+idx+',\'method\',this.value)">' +
-              ['GET','POST','PUT','DELETE'].map(m=>'<option value="'+m+'"'+(rule.method===m?' selected':'')+'>'+m+'</option>').join('') +
-            '</select>' +
+            '<label class="fl" style="color:var(--y)">&#9889; Trigger Keyword <span style="font-weight:normal;color:var(--td)">(user exactly yahi type kare)</span></label>' +
+            '<input type="text" class="fi" value="'+safe(rule.trigger)+'" placeholder="price / weather / status" oninput="laUpdateRule('+idx+',\'trigger\',this.value);this.closest(\'[style*=overflow]\').querySelectorAll(\'span\')[1].textContent=\'trigger: \'+(this.value||\'(empty)\')" style="color:var(--y);border-color:rgba(255,214,10,.4)">' +
           '</div>' +
-          '<div class="fgrp">' +
-            '<label class="fl">Timeout (s)</label>' +
-            '<input type="number" class="fi" value="' + (rule.timeout||30) + '" min="5" max="300" oninput="laUpdateRule('+idx+',\'timeout\',parseInt(this.value)||30)">' +
+        '</div>' +
+        // URL + Method row (simple curl mode)
+        '<div id="la-curl-section-'+idx+'" style="display:'+(useBrowser?'none':'block')+'">' +
+          '<div class="fg mb">' +
+            '<div class="fgrp" style="flex:3">' +
+              '<label class="fl">&#127758; API URL <span style="color:var(--td);font-size:9px">({query} {tg_name} {tg_id} supported)</span></label>' +
+              '<input type="text" class="fi" value="'+safe(rule.url)+'" placeholder="https://api.example.com/data?q={query}" oninput="laUpdateRule('+idx+',\'url\',this.value)">' +
+            '</div>' +
+            '<div class="fgrp" style="flex:1;min-width:90px">' +
+              '<label class="fl">Method</label>' +
+              '<select class="fsel" onchange="laUpdateRule('+idx+',\'method\',this.value)">' +
+                ['GET','POST','PUT','DELETE'].map(m=>'<option value="'+m+'"'+(rule.method===m?' selected':'')+'>'+m+'</option>').join('') +
+              '</select>' +
+            '</div>' +
           '</div>' +
+          // Optional advanced fields (collapsible)
+          '<details style="margin-bottom:10px">' +
+            '<summary style="font-size:11px;color:var(--td);cursor:pointer;padding:4px 0;font-family:\'Share Tech Mono\'">&#9881; Advanced (Headers / Body / Response Path)</summary>' +
+            '<div style="margin-top:8px;display:flex;flex-direction:column;gap:8px">' +
+              '<div class="fgrp">' +
+                '<label class="fl">Headers (Key: Value per line)</label>' +
+                '<textarea class="fta" style="min-height:44px;font-size:11px" placeholder="Authorization: Bearer {MY_KEY}" oninput="laUpdateRule('+idx+',\'headers\',this.value)">'+safe(rule.headers)+'</textarea>' +
+              '</div>' +
+              '<div class="fgrp">' +
+                '<label class="fl">Body (POST/PUT ke liye)</label>' +
+                '<textarea class="fta" style="min-height:40px;font-size:11px" placeholder=\'{"q":"{query}"}\' oninput="laUpdateRule('+idx+',\'body\',this.value)">'+safe(rule.body)+'</textarea>' +
+              '</div>' +
+              '<div class="fgrp">' +
+                '<label class="fl">Response Path (blank=auto) e.g. data.price</label>' +
+                '<input type="text" class="fi" value="'+safe(rule.response_path)+'" placeholder="choices.0.message.content" oninput="laUpdateRule('+idx+',\'response_path\',this.value)">' +
+              '</div>' +
+            '</div>' +
+          '</details>' +
+          '<button class="btn bg bsm" onclick="laTestRule('+idx+')" style="font-size:11px;margin-bottom:8px">&#9889; Test URL</button>' +
+          '<div id="la-test-result-'+idx+'" style="margin-top:4px;display:none"></div>' +
+        '</div>' +
+        // Browser mode toggle
+        '<div style="background:rgba(191,90,242,.07);border:1px solid rgba(191,90,242,.2);border-radius:7px;padding:9px;margin-bottom:10px">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">' +
+            '<span style="font-size:11px;color:var(--p);font-family:\'Share Tech Mono\'">&#129302; Browser Mode (Playwright/Selenium)</span>' +
+            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+              '<input type="checkbox" id="la-use-browser-'+idx+'" '+(useBrowser?'checked':'')+' onchange="laToggleBrowserMode('+idx+',this.checked)" style="accent-color:var(--p);width:14px;height:14px">' +
+              '<span style="font-size:11px;color:'+(useBrowser?'var(--p)':'var(--td)')+';font-family:\'Share Tech Mono\'">'+(useBrowser?'ON':'OFF')+'</span>' +
+            '</label>' +
+          '</div>' +
+          '<div id="la-browser-section-'+idx+'" style="display:'+(useBrowser?'block':'none')+';margin-top:8px">' +
+            '<div style="font-size:9px;color:var(--td);margin-bottom:6px">Browser steps (open, click, fill...). Blank = URL se direct open.</div>' +
+            '<div id="'+bsContId+'" style="margin-bottom:6px"></div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">' +
+              Object.entries(LA_BS_TYPES).map(([k,v])=>'<button class="btn bg bsm" onclick="laAddBrowserStep(\''+bsContId+'\',{type:\''+k+'\'})" style="font-size:10px;padding:2px 6px">'+v.label+'</button>').join('') +
+            '</div>' +
+            '<div class="fg">' +
+              '<div class="fgrp">' +
+                '<label class="fl">Result Var</label>' +
+                '<input type="text" class="fi" id="la-result-var-'+idx+'" value="'+safe(rule.browser_result_var||'result')+'" placeholder="result" oninput="laUpdateRule('+idx+',\'browser_result_var\',this.value)" style="font-size:11px">' +
+              '</div>' +
+              '<div class="fgrp">' +
+                '<label class="fl">Captcha Prompt</label>' +
+                '<input type="text" class="fi" id="la-captcha-prompt-'+idx+'" value="'+safe(rule.captcha_prompt||'🔐 Solve the captcha and reply:')+'" oninput="laUpdateRule('+idx+',\'captcha_prompt\',this.value)" style="font-size:11px">' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        // Reply template
+        '<div class="fgrp mb">' +
+          '<label class="fl">&#128172; Reply Template — <code style="color:var(--y)">{response}</code> = API response</label>' +
+          '<textarea class="fta" style="min-height:58px" placeholder="&#128279; Result:\n{response}" oninput="laUpdateRule('+idx+',\'reply_template\',this.value)">'+safe(rule.reply_template)+'</textarea>' +
         '</div>' +
         '<div class="fgrp mb">' +
-          '<label class="fl">Headers (Key: Value per line)</label>' +
-          '<textarea class="fta" style="min-height:50px;font-size:11px" placeholder="Authorization: Bearer {MY_KEY}&#10;Content-Type: application/json" oninput="laUpdateRule('+idx+',\'headers\',this.value)">' + safe(rule.headers) + '</textarea>' +
+          '<label class="fl">Error Message</label>' +
+          '<input type="text" class="fi" value="'+safe(rule.error_message)+'" placeholder="&#9888; Error!" oninput="laUpdateRule('+idx+',\'error_message\',this.value)">' +
         '</div>' +
-        '<div class="fgrp mb">' +
-          '<label class="fl">Body (for POST/PUT) — {query}, {tg_name} vars</label>' +
-          '<textarea class="fta" style="min-height:45px;font-size:11px" placeholder=\'{"q":"{query}"}\' oninput="laUpdateRule('+idx+',\'body\',this.value)">' + safe(rule.body) + '</textarea>' +
-        '</div>' +
-        '<div class="fgrp mb">' +
-          '<label class="fl">Response Path (e.g. data.result — blank=auto detect)</label>' +
-          '<input type="text" class="fi" value="' + safe(rule.response_path) + '" placeholder="data.price or choices.0.message.content" oninput="laUpdateRule('+idx+',\'response_path\',this.value)">' +
-        '</div>' +
-        '<button class="btn bg bsm" onclick="laTestRule('+idx+')" style="font-size:11px">&#9889; Test URL Now</button>' +
-        '<div id="la-test-result-'+idx+'" style="margin-top:8px;display:none"></div>' +
-      '</div>' +
-      '<div style="background:rgba(57,255,20,.04);border:1px solid rgba(57,255,20,.2);border-radius:8px;padding:11px;margin-bottom:10px">' +
-        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--g);margin-bottom:8px">&#128172; REPLY TEMPLATE</div>' +
-        '<div class="fgrp mb">' +
-          '<label class="fl">Reply Template — {response} = fetched data, {varname} = browser var</label>' +
-          '<textarea class="fta" style="min-height:70px" placeholder="&#128279; Result:\n{response}" oninput="laUpdateRule('+idx+',\'reply_template\',this.value)">' + safe(rule.reply_template) + '</textarea>' +
-        '</div>' +
-        '<div class="fgrp">' +
-          '<label class="fl">Error Message (fetch fail hone par)</label>' +
-          '<input type="text" class="fi" value="' + safe(rule.error_message) + '" placeholder="&#9888;&#65039; Error!" oninput="laUpdateRule('+idx+',\'error_message\',this.value)">' +
-        '</div>' +
-      '</div>' +
-      '<div class="fgrp" style="margin-bottom:10px">' +
-        '<label class="fl">&#128274; Access Control (blank=sab, ya Telegram IDs comma se)</label>' +
-        '<input type="text" class="fi" value="' + safe(rule.access_control) + '" placeholder="{ADMINS} or 123456,789" oninput="laUpdateRule('+idx+',\'access_control\',this.value)">' +
-      '</div>' +
-      // Website Form Capture section
-      '<div style="background:rgba(255,159,10,.06);border:1px solid rgba(255,159,10,.3);border-radius:8px;padding:11px;margin-top:4px">' +
-        '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:' + (rule.form_capture?'10':'0') + 'px">' +
-          '<div style="display:flex;align-items:center;gap:8px">' +
-            '<span style="font-family:\'Share Tech Mono\';font-size:10px;color:var(--o)">&#127760; WEBSITE FORM CAPTURE</span>' +
-            '<span style="font-size:9px;color:var(--td)">Website ke form fields bot se puche, reply site pe upload ho</span>' +
+        // Form Capture (advanced toggle)
+        '<details style="margin-top:4px">' +
+          '<summary style="font-size:11px;color:var(--o);cursor:pointer;padding:4px 0;font-family:\'Share Tech Mono\'">&#127760; Website Form Capture (advanced)</summary>' +
+          '<div style="margin-top:8px">' +
+            '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">' +
+              '<input type="checkbox" id="la-fc-enabled-'+idx+'" '+(rule.form_capture?'checked':'')+' onchange="laToggleFormCapture('+idx+',this.checked)" style="accent-color:var(--o);width:14px;height:14px">' +
+              '<span style="font-size:11px;color:'+(rule.form_capture?'var(--o)':'var(--td)')+';font-family:\'Share Tech Mono\'">'+(rule.form_capture?'ENABLED':'DISABLED')+'</span>' +
+            '</label>' +
+            '<div id="la-fc-section-'+idx+'" style="display:'+(rule.form_capture?'flex':'none')+';flex-direction:column;gap:8px">' +
+              '<div class="fgrp">' +
+                '<label class="fl">Submit URL</label>' +
+                '<input type="text" class="fi" id="la-fc-submit-'+idx+'" value="'+safe(rule.fc_submit_url||'')+'" placeholder="https://yoursite.com/submit" oninput="laUpdateRule('+idx+',\'fc_submit_url\',this.value)" style="font-size:11px">' +
+              '</div>' +
+              '<div class="fgrp">' +
+                '<label class="fl">Form Fields (field_name|Prompt message per line)</label>' +
+                '<textarea class="fta" id="la-fc-fields-'+idx+'" style="min-height:65px;font-size:11px" placeholder="name|Aapka naam?\nemail|Email address?" oninput="laUpdateRule('+idx+',\'fc_fields\',this.value)">'+safe(rule.fc_fields||'')+'</textarea>' +
+              '</div>' +
+              '<div class="fgrp">' +
+                '<label class="fl">Success Message</label>' +
+                '<input type="text" class="fi" id="la-fc-success-'+idx+'" value="'+safe(rule.fc_success_msg||'✅ Form submit ho gaya!')+'" oninput="laUpdateRule('+idx+',\'fc_success_msg\',this.value)" style="font-size:11px">' +
+              '</div>' +
+            '</div>' +
           '</div>' +
-          '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
-            '<input type="checkbox" id="la-fc-enabled-'+idx+'" ' + (rule.form_capture?'checked':'') + ' onchange="laToggleFormCapture('+idx+',this.checked)" style="accent-color:var(--o);width:14px;height:14px">' +
-            '<span style="font-size:11px;color:' + (rule.form_capture?'var(--o)':'var(--td)') + ';font-family:\'Share Tech Mono\'">' + (rule.form_capture?'ON':'OFF') + '</span>' +
-          '</label>' +
-        '</div>' +
-        '<div id="la-fc-section-'+idx+'" style="display:' + (rule.form_capture?'block':'none') + '">' +
-          '<div style="font-size:9px;color:var(--td);margin-bottom:8px">Yahan website ke form fields define karo. Bot Telegram user se in fields ke jawab maangega, phir submit_url pe POST karega.</div>' +
-          '<div class="fgrp mb">' +
-            '<label class="fl">&#128228; Submit URL (form data yahan POST hoga)</label>' +
-            '<input type="text" class="fi" id="la-fc-submit-'+idx+'" value="' + safe(rule.fc_submit_url||'') + '" placeholder="https://yoursite.com/submit" oninput="laUpdateRule('+idx+',\'fc_submit_url\',this.value)" style="font-size:11px">' +
-          '</div>' +
-          '<div class="fgrp mb">' +
-            '<label class="fl">&#128196; Form Fields (ek line = ek field, format: field_name|Prompt message)</label>' +
-            '<textarea class="fta" id="la-fc-fields-'+idx+'" style="min-height:70px;font-size:11px" placeholder="name|Aapka naam kya hai?\nemail|Aapka email dalo\nphone|Phone number?" oninput="laUpdateRule('+idx+',\'fc_fields\',this.value)">' + safe(rule.fc_fields||'') + '</textarea>' +
-          '</div>' +
-          '<div class="fgrp mb">' +
-            '<label class="fl">&#9989; Success Message (submit ke baad user ko yeh bheja jaayega)</label>' +
-            '<input type="text" class="fi" id="la-fc-success-'+idx+'" value="' + safe(rule.fc_success_msg||'✅ Form submit ho gaya!') + '" placeholder="✅ Submitted!" oninput="laUpdateRule('+idx+',\'fc_success_msg\',this.value)" style="font-size:11px">' +
-          '</div>' +
-          '<div class="fgrp">' +
-            '<label class="fl">&#9889; Extra POST Headers (Key: Value per line, optional)</label>' +
-            '<textarea class="fta" id="la-fc-headers-'+idx+'" style="min-height:40px;font-size:11px" placeholder="Authorization: Bearer TOKEN" oninput="laUpdateRule('+idx+',\'fc_headers\',this.value)">' + safe(rule.fc_headers||'') + '</textarea>' +
-          '</div>' +
-        '</div>' +
+        '</details>' +
       '</div>';
     container.appendChild(card);
-    // Restore browser steps after card is in DOM
     if(useBrowser && rule.browser_steps && rule.browser_steps.length){
       rule.browser_steps.forEach(step => laAddBrowserStep(bsContId, step));
     }
@@ -9065,8 +9051,17 @@ function laToggleFormCapture(idx, enabled){
   laUpdateRule(idx, 'form_capture', enabled);
   const sec = g('la-fc-section-'+idx);
   const lbl = document.querySelector('#la-fc-enabled-'+idx+' ~ span');
-  if(sec) sec.style.display = enabled ? 'block' : 'none';
-  if(lbl){ lbl.textContent = enabled ? 'ON' : 'OFF'; lbl.style.color = enabled ? 'var(--o)' : 'var(--td)'; }
+  if(sec) sec.style.display = enabled ? 'flex' : 'none';
+  if(lbl){ lbl.textContent = enabled ? 'ENABLED' : 'DISABLED'; lbl.style.color = enabled ? 'var(--o)' : 'var(--td)'; }
+}
+
+function laToggleAdvanced(){
+  const sec = g('la-advanced-section');
+  const arr = g('la-adv-arrow');
+  if(!sec) return;
+  const open = sec.style.display !== 'none';
+  sec.style.display = open ? 'none' : 'block';
+  if(arr) arr.innerHTML = open ? '&#9660;' : '&#9650;';
 }
 
 // ─── LA Bot Selector ─────────────────────────────────────────────────────────
