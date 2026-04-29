@@ -5137,7 +5137,7 @@ td{padding:9px 11px;vertical-align:middle;}
       <div style="background:rgba(255,159,10,.06);border:1px solid rgba(255,159,10,.2);border-radius:8px;padding:12px;font-size:12px;color:var(--td);line-height:2">
         <b style="color:var(--o)">Flow Builder</b> → Page Edit/New → Go to Message Template section<br>
         <b style="color:var(--t)">💎 Premium Emoji Insert</b> button will appear → click it → select emoji → <b style="color:var(--g)">insert!</b><br>
-        <span style="font-size:10px">Ya directly likhो: <code style="color:var(--c)">{emoji_fire}</code> <code style="color:var(--c)">{emoji_star}</code> etc.</span>
+        <span style="font-size:10px">Or type directly: <code style="color:var(--c)">{emoji_fire}</code> <code style="color:var(--c)">{emoji_star}</code> etc.</span>
       </div>
     </div>
 
