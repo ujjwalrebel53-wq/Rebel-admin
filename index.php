@@ -13,14 +13,9 @@ header("Permissions-Policy: camera=(), microphone=(), geolocation=()");
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 define('ADMIN_USER','admin');
-// bcrypt hash of the admin password — priority: .admin_hash file > REBEL_ADMIN_HASH env > built-in default
-// Default password: rebel@SecureAdmin#2026  — CHANGE THIS before production!
-$_aHashFile=__DIR__.'/.admin_hash';
-$_aHashDefault='$2y$12$QF5M3n7mZHFOuBDhRSWRj.VkbV9rI5LNTDEqKEg8B2eYRbfuvPL5O';
-$_aHash=file_exists($_aHashFile)?trim(file_get_contents($_aHashFile)):(getenv('REBEL_ADMIN_HASH')?:$_aHashDefault);
-define('ADMIN_PASS_HASH', $_aHash);
-// Plain-text fallback for env-based override (set REBEL_ADMIN_PASS env var)
-define('ADMIN_PASS_ENV', getenv('REBEL_ADMIN_PASS') ?: '');
+$_aPassFile=__DIR__.'/.admin_pass';
+$_aPass=file_exists($_aPassFile)?trim(file_get_contents($_aPassFile)):(getenv('REBEL_ADMIN_PASS')?:'admin');
+define('ADMIN_PASS',$_aPass);
 define('BOTS_DIR',__DIR__.'/bots/');
 define('MASTER_FILE',__DIR__.'/rebel_bots.json');
 define('TG_BASE','https://api.telegram.org/bot');
@@ -56,8 +51,7 @@ function getLoginLockedSecs($ip){
 
 // ─── Password verification ──────────────────────────────────────────────────
 function verifyAdminPassword($pass){
-    if(ADMIN_PASS_ENV!==''&&hash_equals(ADMIN_PASS_ENV,$pass))return true;
-    return password_verify($pass,ADMIN_PASS_HASH);
+    return $pass === ADMIN_PASS;
 }
 
 // ─── CSRF helpers ───────────────────────────────────────────────────────────
@@ -3316,11 +3310,9 @@ if($page==='api'){
         case 'change_admin_pass':
             $cur=$body['current']??'';$new=$body['new']??'';
             if(!verifyAdminPassword($cur))jout(['ok'=>false,'error'=>'Current password wrong']);
-            if(strlen($new)<8)jout(['ok'=>false,'error'=>'New password must be at least 8 characters']);
-            $hash=password_hash($new,PASSWORD_BCRYPT,['cost'=>12]);
-            $cf=__DIR__.'/.admin_hash';file_put_contents($cf,$hash,LOCK_EX);chmod($cf,0600);
-            // Also update env override for this process (ephemeral, but hash file persists)
-            jout(['ok'=>true,'hash'=>$hash,'note'=>'Hash saved. Set REBEL_ADMIN_HASH env var or update ADMIN_PASS_HASH in code.']);break;
+            if(strlen($new)<1)jout(['ok'=>false,'error'=>'New password cannot be empty']);
+            $cf=__DIR__.'/.admin_pass';file_put_contents($cf,$new,LOCK_EX);chmod($cf,0600);
+            jout(['ok'=>true,'note'=>'Password updated successfully.']);break;
         case 'save_settings':$db['settings']=array_merge($db['settings'],$body['settings']??[]);saveDB($actId,$db);jout(['ok'=>true]);break;
 
         case 'get_force_join':
