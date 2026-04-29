@@ -50,49 +50,51 @@ function getPythonBin():string{
 }
 define('PYTHON_BIN',getPythonBin());
 
-// ─── Safe exec wrapper: works even if exec() is in disable_functions ─────────
+// ─── Safe exec wrapper: VPS/Linux optimised, shared hosting fallback ──────────
 function runPythonScript(string $scrFile, int $timeout=120):void{
-    // Extend PHP execution time to allow the script to finish
-    @set_time_limit(max(120,$timeout+30));
+    @set_time_limit(max(180,$timeout+60));
+    $dfuncs=array_map('trim',explode(',',ini_get('disable_functions')));
+    $canExec =function_exists('exec')       &&!in_array('exec',$dfuncs);
+    $canProc =function_exists('proc_open')  &&!in_array('proc_open',$dfuncs);
+    $canShell=function_exists('shell_exec') &&!in_array('shell_exec',$dfuncs);
+    $canSys  =function_exists('system')     &&!in_array('system',$dfuncs);
 
-    // Method 1: proc_open (most reliable, supports timeout monitoring)
-    if(function_exists('proc_open')&&!in_array('proc_open',array_map('trim',explode(',',ini_get('disable_functions'))))){
+    // Method 1: timeout command + exec (best on VPS/Linux — hard kill after $timeout secs)
+    if($canExec){
+        $timeoutBin='';
+        foreach(['/usr/bin/timeout','/bin/timeout'] as $tb){if(file_exists($tb)){$timeoutBin=$tb;break;}}
+        if($timeoutBin!==''){
+            $out=[];$ret=0;
+            @exec($timeoutBin.' '.escapeshellarg((string)$timeout).' '.PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null',$out,$ret);
+            return;
+        }
+        // No timeout binary — run directly via exec (synchronous)
+        $out=[];$ret=0;
+        @exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null',$out,$ret);
+        return;
+    }
+    // Method 2: proc_open with manual timeout loop
+    if($canProc){
         $desc=[['pipe','r'],['pipe','w'],['pipe','w']];
-        $cmd=PYTHON_BIN.' '.escapeshellarg($scrFile);
-        $proc=@proc_open($cmd,$desc,$pipes);
+        $proc=@proc_open(PYTHON_BIN.' '.escapeshellarg($scrFile),$desc,$pipes);
         if($proc){
             fclose($pipes[0]);
             stream_set_blocking($pipes[1],false);
             stream_set_blocking($pipes[2],false);
             $start=time();
-            while(true){
-                $status=proc_get_status($proc);
-                if(!$status['running'])break;
+            while(proc_get_status($proc)['running']){
                 if(time()-$start>=$timeout){proc_terminate($proc,9);break;}
-                usleep(200000);
+                usleep(250000);
             }
             fclose($pipes[1]);fclose($pipes[2]);proc_close($proc);
             return;
         }
     }
-    // Method 2: exec foreground (no & — waits for completion)
-    if(function_exists('exec')&&!in_array('exec',array_map('trim',explode(',',ini_get('disable_functions'))))){
-        $out=[];$ret=0;
-        @exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null',$out,$ret);
-        return;
-    }
-    // Method 3: shell_exec (synchronous)
-    if(function_exists('shell_exec')&&!in_array('shell_exec',array_map('trim',explode(',',ini_get('disable_functions'))))){
-        @shell_exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');
-        return;
-    }
-    // Method 4: system (synchronous)
-    if(function_exists('system')&&!in_array('system',array_map('trim',explode(',',ini_get('disable_functions'))))){
-        @system(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');
-        return;
-    }
-    // If all methods fail, log it — browser automation won't work on this host
-    error_log('REBEL: All exec methods disabled. Browser automation unavailable. Set REBEL_PYTHON_BIN env or enable exec/proc_open in php.ini.');
+    // Method 3: shell_exec
+    if($canShell){@shell_exec(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');return;}
+    // Method 4: system
+    if($canSys){@system(PYTHON_BIN.' '.escapeshellarg($scrFile).' 2>/dev/null');return;}
+    error_log('REBEL: All exec methods disabled. Browser automation unavailable.');
 }
 
 // ─── Login Rate Limiting (brute-force protection) ───────────────────────────
@@ -830,20 +832,51 @@ def av(t):
         return random.choice(pts) if pts else ''
     return re.sub(r'\{random:([^}]+)\}',rr,t)
 _UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-_STEALTH_ARGS=['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--disable-infobars','--window-size=1920,1080','--disable-gpu','--lang=en-IN','--disable-extensions','--no-first-run','--ignore-certificate-errors']
+# --single-process removed: breaks on VPS; --disable-gpu needed for headless servers
+_STEALTH_ARGS=[
+    '--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
+    '--disable-blink-features=AutomationControlled','--disable-infobars',
+    '--window-size=1920,1080','--disable-gpu','--lang=en-IN',
+    '--disable-extensions','--no-first-run','--ignore-certificate-errors',
+    '--disable-software-rasterizer','--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows','--disable-renderer-backgrounding',
+]
+# Find system Chromium binary (fallback when playwright install chromium failed/incomplete)
+_SYSTEM_CHROME_PATHS=[
+    os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH',''),
+    os.environ.get('CHROME_BIN',''),
+    os.environ.get('CHROMIUM_BIN',''),
+    '/usr/bin/chromium-browser','/usr/bin/chromium','/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome','/usr/bin/google-chrome-beta',
+    '/usr/local/bin/chromium-browser','/usr/local/bin/chromium',
+    '/snap/bin/chromium','/snap/chromium/current/usr/lib/chromium-browser/chromium-browser',
+]
+_sys_chrome=next((p for p in _SYSTEM_CHROME_PATHS if p and os.path.isfile(p) and os.access(p,os.X_OK)),None)
 P=None;B=None;PW=False;_p=None;_PW_CTX=None
+_last_err='No browser available'
 try:
     from playwright.sync_api import sync_playwright
     _p=sync_playwright().__enter__();PW=True
-except: pass
+except Exception as _e:
+    _last_err='playwright import failed: '+str(_e)
 if PW:
     ok=False
-    for ch in ['chrome','msedge',None]:
+    # Launch order: playwright's own Chromium first (best on VPS after playwright install chromium)
+    # then system chromium, then Chrome/Edge channels
+    _launch_attempts=[{}]  # default = playwright's downloaded chromium
+    if _sys_chrome: _launch_attempts.append({'executable_path':_sys_chrome})
+    _launch_attempts+=[{'channel':'chrome'},{'channel':'msedge'}]
+    for _la in _launch_attempts:
         try:
-            _bargs=_STEALTH_ARGS[:]
-            _b=_p.chromium.launch(channel=ch,headless=True,args=_bargs) if ch else _p.chromium.launch(headless=True,args=_bargs)
+            if 'executable_path' in _la:
+                _b=_p.chromium.launch(executable_path=_la['executable_path'],headless=True,args=_STEALTH_ARGS)
+            elif 'channel' in _la:
+                _b=_p.chromium.launch(channel=_la['channel'],headless=True,args=_STEALTH_ARGS)
+            else:
+                _b=_p.chromium.launch(headless=True,args=_STEALTH_ARGS)
             ok=True;B=_b;break
-        except: pass
+        except Exception as _e:
+            _last_err='playwright launch ('+str(_la)+'): '+str(_e)
     if not ok: PW=False
 if not PW:
     try:
@@ -854,25 +887,37 @@ if not PW:
         from selenium.webdriver.chrome.options import Options as CO
         o=CO()
         for a in _STEALTH_ARGS+['--headless=new']: o.add_argument(a)
-        o.add_experimental_option('excludeSwitches',['enable-automation'])
-        o.add_experimental_option('useAutomationExtension',False)
+        try:
+            o.add_experimental_option('excludeSwitches',['enable-automation'])
+            o.add_experimental_option('useAutomationExtension',False)
+        except: pass
         o.add_argument(f'--user-agent={_UA}')
-        try: B=webdriver.Chrome(options=o)
-        except:
+        if _sys_chrome: o.binary_location=_sys_chrome
+        _sel_ok=False
+        for _drv_attempt in [0,1]:
             try:
-                from selenium.webdriver.chromium.options import ChromiumOptions
-                o2=ChromiumOptions()
-                for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--window-size=1920,1080']: o2.add_argument(a)
-                o2.add_argument(f'--user-agent={_UA}')
-                B=webdriver.Chrome(options=o2)
-            except Exception as e:
-                R['status']='error';R['error']='No browser: '+str(e)
-                open(RF,'w').write(json.dumps(R));sys.exit(1)
+                if _drv_attempt==0:
+                    B=webdriver.Chrome(options=o)
+                else:
+                    from selenium.webdriver.chromium.options import ChromiumOptions
+                    o2=ChromiumOptions()
+                    for a in _STEALTH_ARGS+['--headless=new']: o2.add_argument(a)
+                    o2.add_argument(f'--user-agent={_UA}')
+                    if _sys_chrome: o2.binary_location=_sys_chrome
+                    B=webdriver.Chrome(options=o2)
+                _sel_ok=True;break
+            except Exception as _e:
+                _last_err='selenium attempt '+str(_drv_attempt)+': '+str(_e)
+        if not _sel_ok:
+            R['status']='error'
+            R['error']='No browser found.\nVPS pe run karo:\n  pip3 install playwright\n  playwright install chromium\nYa system chromium:\n  apt install chromium-browser\nLast error: '+_last_err
+            open(RF,'w').write(json.dumps(R,ensure_ascii=False));sys.exit(1)
         try: B.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':'Object.defineProperty(navigator,"webdriver",{get:()=>undefined})'})
         except: pass
-    except ImportError as e:
-        R['status']='error';R['error']='selenium missing: '+str(e)
-        open(RF,'w').write(json.dumps(R));sys.exit(1)
+    except ImportError as _e:
+        R['status']='error'
+        R['error']='Browser libraries not found.\nRun: pip3 install playwright && playwright install chromium\nError: '+str(_e)
+        open(RF,'w').write(json.dumps(R,ensure_ascii=False));sys.exit(1)
 def _pw_goto(url,timeout=45000):
     global P
     try: P.goto(url,wait_until='networkidle',timeout=timeout)
@@ -3974,9 +4019,10 @@ if($page==='api'){
             $diag=[];
             $diag['php_version']=PHP_VERSION;
             $diag['python_bin']=PYTHON_BIN;
-            $diag['exec_available']=function_exists('exec')&&!in_array('exec',array_map('trim',explode(',',ini_get('disable_functions'))));
-            $diag['proc_open_available']=function_exists('proc_open')&&!in_array('proc_open',array_map('trim',explode(',',ini_get('disable_functions'))));
-            $diag['shell_exec_available']=function_exists('shell_exec')&&!in_array('shell_exec',array_map('trim',explode(',',ini_get('disable_functions'))));
+            $dfuncs=array_map('trim',explode(',',ini_get('disable_functions')));
+            $diag['exec_available']=function_exists('exec')&&!in_array('exec',$dfuncs);
+            $diag['proc_open_available']=function_exists('proc_open')&&!in_array('proc_open',$dfuncs);
+            $diag['shell_exec_available']=function_exists('shell_exec')&&!in_array('shell_exec',$dfuncs);
             $diag['disable_functions']=ini_get('disable_functions');
             $diag['tmpdir']=sys_get_temp_dir();
             $diag['tmp_writable']=is_writable(sys_get_temp_dir());
@@ -3989,10 +4035,23 @@ if($page==='api'){
             $pwOut=[];$pwRet=1;
             if($diag['exec_available']){@exec(PYTHON_BIN.' -c "import playwright;print(playwright.__version__)" 2>&1',$pwOut,$pwRet);}
             $diag['playwright']=($pwRet===0)?implode('',$pwOut):'not installed';
+            // Playwright browser check (separate from package — download may be incomplete)
+            $pwBrOut=[];$pwBrRet=1;
+            if($diag['exec_available']){@exec(PYTHON_BIN.' -c "from playwright.sync_api import sync_playwright;p=sync_playwright().__enter__();b=p.chromium.launch(headless=True,args=[\'--no-sandbox\']);b.close();p.__exit__(None,None,None);print(\'ok\')" 2>&1',$pwBrOut,$pwBrRet);}
+            $diag['playwright_browser']=($pwBrRet===0&&implode('',$pwBrOut)==='ok')?'installed':'not installed (run: playwright install chromium)';
             // Selenium check
             $seOut=[];$seRet=1;
             if($diag['exec_available']){@exec(PYTHON_BIN.' -c "import selenium;print(selenium.__version__)" 2>&1',$seOut,$seRet);}
             $diag['selenium']=($seRet===0)?implode('',$seOut):'not installed';
+            // System Chromium check
+            $chromePaths=['/usr/bin/chromium-browser','/usr/bin/chromium','/usr/bin/google-chrome-stable','/usr/bin/google-chrome','/snap/bin/chromium'];
+            $foundChrome='not found';
+            foreach($chromePaths as $cp){if(file_exists($cp)&&is_executable($cp)){$foundChrome=$cp;break;}}
+            if($foundChrome==='not found'&&$diag['exec_available']){
+                $cOut=[];$cRet=1;@exec('which chromium-browser 2>/dev/null || which chromium 2>/dev/null || which google-chrome 2>/dev/null',$cOut,$cRet);
+                if(!empty($cOut)&&trim($cOut[0])!=='')$foundChrome=trim($cOut[0]);
+            }
+            $diag['system_chromium']=$foundChrome;
             $diag['max_execution_time']=ini_get('max_execution_time');
             $diag['memory_limit']=ini_get('memory_limit');
             jout(['ok'=>true,'data'=>$diag]);break;
@@ -4650,34 +4709,31 @@ td{padding:9px 11px;vertical-align:middle;}
       <button class="btn bp" onclick="saveCfg()">💾 Save Config</button>
     </div>
 
-    <!-- ALWAYSDATA / HOSTING SETUP GUIDE -->
+    <!-- VPS / HOSTING SETUP GUIDE -->
     <div class="card" style="border-color:rgba(255,159,10,.35)">
-      <div class="sh"><div class="st" style="color:var(--o)">🖥️ HOSTING SETUP (AlwaysData / Shared Hosting)</div><button class="btn bg bsm" onclick="loadDiag();showPanel('p-dash')" style="font-size:10px">🔧 Run Diagnostics</button></div>
+      <div class="sh"><div class="st" style="color:var(--o)">🖥️ SERVER SETUP GUIDE (VPS / Hosting)</div><button class="btn bg bsm" onclick="nav('dash',document.querySelector('.ni'))" style="font-size:10px">🔧 Run Diagnostics</button></div>
       <details>
-        <summary style="font-size:12px;color:var(--o);cursor:pointer;padding:4px 0;font-family:'Share Tech Mono'">AlwaysData pe setup kaise karo — click to expand</summary>
+        <summary style="font-size:12px;color:var(--o);cursor:pointer;padding:4px 0;font-family:'Share Tech Mono'">VPS pe browser automation setup kaise karo — click karo</summary>
         <div style="font-size:12px;color:var(--td);margin-top:10px;line-height:1.9">
+          <b style="color:var(--g)">✅ VPS pe sab kuch kaam karta hai — sirf ye steps follow karo:</b><br><br>
           <b style="color:var(--c)">Step 1 — Python packages install karo (SSH se):</b><br>
-          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">pip install playwright selenium</code>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">pip3 install playwright selenium</code>
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">playwright install chromium</code>
           <br>
-          <b style="color:var(--c)">Step 2 — Python binary path set karo:</b><br>
-          Root folder mein <code style="color:var(--y)">.python_bin</code> file banao, andar sirf path likhao:<br>
-          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">/usr/bin/python3</code>
-          (AlwaysData pe: <code style="color:var(--y)">/usr/alwaysdata/python/3.12/bin/python3</code>)<br>
-          Ya environment variable set karo: <code style="color:var(--y)">REBEL_PYTHON_BIN</code><br>
+          <b style="color:var(--c)">Step 2 (Optional) — System Chromium bhi install karo (backup):</b><br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">apt install -y chromium-browser chromium-chromedriver</code>
           <br>
           <b style="color:var(--c)">Step 3 — PHP max_execution_time badhao:</b><br>
-          Root mein <code style="color:var(--y)">.user.ini</code> file banao:<br>
-          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">max_execution_time = 180<br>memory_limit = 512M</code>
+          Root mein <code style="color:var(--y)">.user.ini</code> ya <code style="color:var(--y)">php.ini</code> mein:<br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">max_execution_time = 300
+memory_limit = 512M</code>
           <br>
-          <b style="color:var(--c)">Step 4 — Agar browser automation kaam na kare:</b><br>
-          AlwaysData shared hosting pe headless Chromium run nahi hota.<br>
-          <span style="color:var(--r)">Browser automation (Playwright/Selenium) sirf VPS/dedicated server pe kaam karta hai.</span><br>
-          Link Automation ke liye <b style="color:var(--g)">Curl mode</b> (Browser Mode OFF) use karo jo shared hosting pe kaam karta hai.<br>
+          <b style="color:var(--c)">Step 4 — Agar python3 nahi milta:</b><br>
+          Root folder mein <code style="color:var(--y)">.python_bin</code> file banao, andar Python ka full path likhao:<br>
+          <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">/usr/bin/python3</code>
+          Ya environment variable: <code style="color:var(--y)">REBEL_PYTHON_BIN=/usr/bin/python3</code><br>
           <br>
-          <b style="color:var(--c)">Step 5 — exec() disabled hai to:</b><br>
-          AlwaysData Admin Panel → PHP → disable_functions se <code style="color:var(--y)">exec,proc_open,shell_exec</code> hatao.<br>
-          Ya support se request karo.
+          <b style="color:var(--c)">Dashboard pe Diagnostics card mein "🔄 Check" button se verify karo.</b>
         </div>
       </details>
     </div>
@@ -6611,35 +6667,38 @@ async function loadLogs(){const r=await api('get_logs');const b=g('logB');if(r.o
 
 async function loadDiag(){
   const b=g('diag-body');
-  b.innerHTML='<div style="color:var(--y)">Checking...</div>';
+  if(!b){toast('Dashboard tab open karo pehle','error');return;}
+  b.innerHTML='<div style="color:var(--y)">⏳ Checking system... (thodi der lagegi)</div>';
   const r=await api('get_diag');
-  if(!r.ok){b.innerHTML='<div style="color:var(--r)">Error loading diagnostics</div>';return;}
+  if(!r.ok){b.innerHTML='<div style="color:var(--r)">❌ Error: '+(r.error||'diagnostics load nahi hui')+'</div>';return;}
   const d=r.data;
   const ok=v=>`<span style="color:var(--g)">✅ ${v}</span>`;
   const warn=v=>`<span style="color:var(--y)">⚠️ ${v}</span>`;
   const err=v=>`<span style="color:var(--r)">❌ ${v}</span>`;
   const rows=[
-    ['PHP Version', d.php_version, d.php_version>='8.0'?ok(d.php_version):warn(d.php_version+' (PHP 8.0+ recommended)')],
-    ['Python Binary', d.python_bin, d.python_version!=='N/A (exec disabled or python not found)'?ok(d.python_bin):err(d.python_bin+' (not found or exec disabled)')],
-    ['Python Version', '', d.python_version.includes('N/A')?err(d.python_version):ok(d.python_version)],
-    ['exec() available', '', d.exec_available?ok('Yes'):err('No — browser automation will NOT work')],
-    ['proc_open() available', '', d.proc_open_available?ok('Yes'):warn('No (fallback to exec)')],
-    ['shell_exec() available', '', d.shell_exec_available?ok('Yes'):warn('No (fallback available)')],
-    ['Playwright', '', d.playwright!=='not installed'?ok('v'+d.playwright):warn('Not installed — run: pip install playwright && playwright install chromium')],
-    ['Selenium', '', d.selenium!=='not installed'?ok('v'+d.selenium):warn('Not installed — run: pip install selenium')],
-    ['Temp dir writable', d.tmpdir, d.tmp_writable?ok('Yes'):err('No — browser automation will fail')],
-    ['Bots dir writable', '', d.bots_dir_writable?ok('Yes'):err('No — cannot save data')],
-    ['Max Execution Time', d.max_execution_time+'s', parseInt(d.max_execution_time)<60?warn(d.max_execution_time+'s (too low, set to 120 in php.ini)'):ok(d.max_execution_time+'s')],
+    ['PHP Version', d.php_version, parseFloat(d.php_version)>=8.0?ok(d.php_version):warn(d.php_version+' (PHP 8.0+ recommended)')],
+    ['Python Binary', d.python_bin, (d.python_version||'').includes('N/A')?err(d.python_bin+' (not found)'):ok(d.python_bin)],
+    ['Python Version', '', (d.python_version||'').includes('N/A')?err(d.python_version):ok(d.python_version)],
+    ['exec() available', '', d.exec_available?ok('Yes'):err('No — browser automation NAHI chalega')],
+    ['proc_open() available', '', d.proc_open_available?ok('Yes'):warn('No')],
+    ['Playwright package', '', (d.playwright||'')!=='not installed'?ok('v'+d.playwright):warn('Not installed — run: pip3 install playwright')],
+    ['Playwright browser', '', (d.playwright_browser||'').startsWith('installed')?ok('Chromium ready ✓'):err((d.playwright_browser||'not installed')+' — run: playwright install chromium')],
+    ['Selenium', '', (d.selenium||'')!=='not installed'?ok('v'+d.selenium):warn('Not installed (optional) — run: pip3 install selenium')],
+    ['System Chromium', d.system_chromium||'', (d.system_chromium||'not found')!=='not found'?ok(d.system_chromium):warn('Not found (optional) — apt install chromium-browser')],
+    ['Temp dir writable', d.tmpdir, d.tmp_writable?ok('Yes'):err('No — browser automation fail hoga')],
+    ['Bots dir writable', '', d.bots_dir_writable?ok('Yes'):err('No — data save nahi hoga')],
+    ['Max Exec Time', (d.max_execution_time||0)+'s', parseInt(d.max_execution_time)<60?warn(d.max_execution_time+'s — php.ini mein 180 set karo'):ok(d.max_execution_time+'s')],
     ['Memory Limit', d.memory_limit, ok(d.memory_limit)],
-    ['Disabled Functions', '', d.disable_functions?warn(d.disable_functions):ok('None')],
+    ['Disabled Functions', '', (d.disable_functions||'')?warn(d.disable_functions):ok('None ✓')],
   ];
-  b.innerHTML='<table style="width:100%;border-collapse:collapse">'+rows.map(([k,v,s])=>`<tr><td style="color:var(--td);padding:3px 8px 3px 0;white-space:nowrap">${k}</td><td style="color:var(--tf);font-size:10px;padding:3px 8px 3px 0">${v||''}</td><td style="padding:3px 0">${s}</td></tr>`).join('')+'</table>'+
-    `<div style="margin-top:10px;padding:8px;background:rgba(0,245,255,.06);border:1px solid rgba(0,245,255,.2);border-radius:6px;color:var(--td);font-size:10px">
-      <b style="color:var(--c)">AlwaysData Setup Guide:</b><br>
-      1. SSH login: <code>pip install playwright selenium && playwright install chromium</code><br>
-      2. If exec() disabled: Contact AlwaysData support to enable it, or use curl-only link automation (no browser mode)<br>
-      3. Set python binary: Create <code>.python_bin</code> file in root with path, e.g. <code>/usr/bin/python3</code><br>
-      4. Set in php.ini: <code>max_execution_time = 180</code>
+  b.innerHTML='<table style="width:100%;border-collapse:collapse">'+
+    rows.map(([k,v,s])=>`<tr style="border-bottom:1px solid rgba(255,255,255,.04)"><td style="color:var(--td);padding:4px 10px 4px 0;white-space:nowrap;font-size:11px">${k}</td><td style="color:var(--tf);font-size:10px;padding:4px 10px 4px 0;max-width:120px;overflow:hidden;text-overflow:ellipsis">${v||''}</td><td style="padding:4px 0;font-size:11px">${s}</td></tr>`).join('')+
+    '</table>'+
+    `<div style="margin-top:12px;padding:10px;background:rgba(57,255,20,.05);border:1px solid rgba(57,255,20,.2);border-radius:6px;font-size:11px">
+      <b style="color:var(--g)">VPS Setup Commands (SSH se):</b><br>
+      <code style="color:var(--c);display:block;margin:4px 0;background:var(--s2);padding:4px 8px;border-radius:4px">pip3 install playwright selenium</code>
+      <code style="color:var(--c);display:block;margin:4px 0;background:var(--s2);padding:4px 8px;border-radius:4px">playwright install chromium</code>
+      <code style="color:var(--c);display:block;margin:4px 0;background:var(--s2);padding:4px 8px;border-radius:4px">apt install chromium-browser chromium-chromedriver  # (optional fallback)</code>
     </div>`;
 }
 
