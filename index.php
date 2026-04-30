@@ -847,6 +847,27 @@ def fel(sel):
     except:
         try: return B.find_element(By.XPATH,sel)
         except: raise Exception('Not found: '+sel)
+def _try_sel(sel,timeout_ms=10000):
+    """Try each comma-separated selector in sequence; return the first visible locator (Playwright) or element (Selenium)."""
+    parts=[s.strip() for s in sel.split(',') if s.strip()]
+    if PW:
+        pg=_act_page()
+        for s in parts:
+            try:
+                loc=pg.locator(s).first
+                loc.wait_for(state='visible',timeout=min(timeout_ms,3000))
+                return loc
+            except: pass
+        # Fallback: use full comma-separated selector (Playwright CSS supports it natively)
+        return pg.locator(sel).first
+    else:
+        for s in parts:
+            try:
+                by=By.XPATH if s.startswith('//') or s.startswith('(//') else By.CSS_SELECTOR
+                el=B.find_element(by,s)
+                if el.is_displayed(): return el
+            except: pass
+        raise Exception('No visible element for: '+sel)
 steps={$stJ}
 for i,st in enumerate(steps):
     if i<FROM: continue
@@ -860,11 +881,26 @@ for i,st in enumerate(steps):
         elif t=='wait': time.sleep(float(av(str(st.get('value','2')))))
         elif t=='wait_load':
             state=av(st.get('value','networkidle'));to=int(float(st.get('timeout',15))*1000)
-            if PW: P.wait_for_load_state(state,timeout=to)
+            if PW:
+                try: P.wait_for_load_state(state,timeout=to)
+                except:
+                    # Fallback: networkidle can timeout on heavy SPAs; try domcontentloaded
+                    try: P.wait_for_load_state('domcontentloaded',timeout=5000)
+                    except: pass
             else: time.sleep(2)
         elif t=='wait_element':
             s=av(st.get('selector',''));to=float(st.get('timeout',10))
-            if PW: _act_page().wait_for_selector(s,timeout=int(to*1000))
+            if PW:
+                parts=[x.strip() for x in s.split(',') if x.strip()]
+                found=False
+                deadline=time.time()+to
+                while time.time()<deadline and not found:
+                    for part in parts:
+                        try:
+                            _act_page().wait_for_selector(part,timeout=min(2000,int((deadline-time.time())*1000)))
+                            found=True;break
+                        except: pass
+                if not found: _act_page().wait_for_selector(s,timeout=1000)
             else:
                 by=By.XPATH if s.startswith('//') or s.startswith('(//') else By.CSS_SELECTOR
                 WebDriverWait(B,to).until(EC.presence_of_element_located((by,s)))
@@ -876,14 +912,17 @@ for i,st in enumerate(steps):
                     from selenium.webdriver.common.action_chains import ActionChains
                     ActionChains(B).move_by_offset(float(x),float(y)).click().perform()
             else:
-                pg=_act_page()
                 s=av(st.get('selector',''))
-                if PW: pg.locator(s).first.click()
-                else: fel(s).click()
+                if PW: _try_sel(s,6000).click()
+                else: _try_sel(s).click()
         elif t=='fill':
             s=av(st.get('selector',''));v=av(st.get('value',''))
-            if PW: _act_page().fill(s,v)
-            else: el=fel(s);el.clear();el.send_keys(v)
+            if PW:
+                loc=_try_sel(s,8000)
+                loc.fill(v)
+                try: loc.dispatch_event('input');loc.dispatch_event('change')
+                except: pass
+            else: el=_try_sel(s);el.clear();el.send_keys(v)
         elif t=='scroll':
             v=float(av(str(st.get('value','500'))))
             if PW: P.mouse.wheel(0,v)
@@ -909,7 +948,19 @@ for i,st in enumerate(steps):
                 ActionChains(B).move_to_element(fel(s)).perform()
         elif t=='get_text':
             s=av(st.get('selector',''));vn=st.get('var_name','result')
-            txt=_act_page().locator(s).first.inner_text() if PW else fel(s).text
+            if PW:
+                txt=''
+                for part in [x.strip() for x in s.split(',') if x.strip()]:
+                    try:
+                        loc=_act_page().locator(part).first
+                        loc.wait_for(state='visible',timeout=3000)
+                        txt=loc.inner_text().strip()
+                        if txt: break
+                    except: pass
+                if not txt:
+                    try: txt=_act_page().locator(s).first.inner_text().strip()
+                    except: txt=''
+            else: txt=fel(s).text
             V[vn]=txt;R['steps'].append({'i':i,'type':t,'status':'ok','value':txt});continue
         elif t=='screenshot':
             crop=[st.get('crop_x'),st.get('crop_y'),st.get('crop_w'),st.get('crop_h')]
@@ -977,11 +1028,14 @@ for i,st in enumerate(steps):
         elif t=='type_slow':
             s=av(st.get('selector',''));txt=av(st.get('value',''));dms=float(st.get('delay_ms',80))
             if PW:
-                _act_page().locator(s).first.click()
-                _act_page().locator(s).first.fill('')
-                _act_page().locator(s).first.type(txt,delay=dms)
+                loc=_try_sel(s,8000)
+                loc.click()
+                loc.fill('')
+                loc.type(txt,delay=dms)
+                try: loc.dispatch_event('input');loc.dispatch_event('change')
+                except: pass
             else:
-                el=fel(s);el.clear()
+                el=_try_sel(s);el.clear()
                 for ch in txt: el.send_keys(ch);time.sleep(dms/1000)
         elif t=='wait_url':
             expected=av(st.get('value',''));timeout=float(st.get('timeout',10))
@@ -1365,7 +1419,8 @@ function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$tok
     $triggerKw=strtolower(trim($rule['trigger']??''));
     $tMode=$rule['trigger_mode']??'exact';
     if($tMode==='startswith'&&$triggerKw!==''){
-        $after=ltrim(substr($msgText,strlen($triggerKw)));
+        // Case-insensitive: skip as many bytes as the trigger keyword, then trim both sides
+        $after=trim(substr($msgText,strlen($triggerKw)));
         $vars['query_arg']=$after;
     } elseif($tMode==='contains'&&$triggerKw!==''){
         $vars['query_arg']=$msgText;
@@ -8876,46 +8931,67 @@ function laApplyUidaiTemplate(tpl, bsContId){
   const container = g(bsContId);
   if(!container) return;
   container.innerHTML = '';
+  // Selector lists: try first match that exists on current UIDAI portal layout
+  const aadhaarSel = 'input[formcontrolname="aadhaarNo"], input[formcontrolname="aadhaarId"], input[id="aadhaarNo"], input[placeholder*="Aadhaar Number"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], input[placeholder*="Enter Aadhaar"], #aadhaarNo';
+  const captchaSel = 'input[formcontrolname="captchaCode"], input[formcontrolname="securityCode"], input[formcontrolname="captcha"], input[id="captchaCode"], input[placeholder*="Enter Captcha"], input[placeholder*="captcha"], input[placeholder*="Captcha"], input[placeholder*="security"], input[name="captcha"], #captchaCode, #captcha';
+  const submitSel  = 'button[type="submit"]:visible, .submit-btn:visible, .btn-verify:visible, .btn-primary:visible, button:has-text("Proceed"), button:has-text("Submit"), button:has-text("Verify"), button:has-text("Check Status"), button:has-text("Send OTP")';
+  const resultSel  = 'mat-dialog-content, .modal-body, .result-container, .verification-status, .result-msg, .success-message, .error-message, .ng-star-inserted mat-card, mat-card p, .alert, .response-msg, h2, h3';
+
   const steps = {
     verify: [
       {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
       {type:'open', value:'https://myaadhaar.uidai.gov.in/verifyAadhaar', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
-      {type:'screenshot', caption:'Aadhaar number filled', crop_x:'', crop_y:'', crop_w:'', crop_h:'', send_ss:false, delete_after:false},
-      {type:'ask_captcha', caption:'🔐 Neeche security code dikhta hai, woh reply karo:', crop_x:'300', crop_y:'280', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="securityCode"], input[placeholder*="security code"], input[placeholder*="Security Code"], #captcha, input[name="captcha"]', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], button.submit-btn, .verify-btn, .btn-verify, .btn-primary', stop_on_error:false},
       {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
+      {type:'wait_element', selector:aadhaarSel, timeout:'25'},
+      {type:'scroll', value:'200'},
+      {type:'type_slow', selector:aadhaarSel, value:'{aadhaar_no}', delay_ms:'80'},
+      {type:'wait', value:'1'},
+      {type:'screenshot', caption:'Aadhaar number filled', crop_x:'', crop_y:'', crop_w:'', crop_h:'', send_ss:false, delete_after:false},
+      {type:'ask_captcha', caption:'🔐 Neeche security code dikhta hai, woh reply karo:', crop_x:'250', crop_y:'350', crop_w:'500', crop_h:'150', var_name:'captcha'},
+      {type:'type_slow', selector:captchaSel, value:'{captcha}', delay_ms:'60'},
+      {type:'wait', value:'0.5'},
+      {type:'click', selector:submitSel, stop_on_error:false},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
       {type:'screenshot', caption:'Verification result', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.verification-status, .result-msg, .success-message, mat-card, .ng-star-inserted h2, .alert, mat-dialog-content', var_name:'result'},
+      {type:'get_text', selector:resultSel, var_name:'result'},
     ],
     status: [
       {type:'set_var', var_name:'enrolment_id', value:'{query_arg}'},
       {type:'open', value:'https://myaadhaar.uidai.gov.in/CheckAadhaarStatus', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="eid"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid, input[name="eid"]', value:'{enrolment_id}'},
-      {type:'ask_captcha', caption:'🔐 Security code reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[placeholder*="Security"], #captcha, input[name="captcha"]', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], .submit-btn, .check-status-btn, .btn-primary'},
       {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
+      {type:'wait_element', selector:'input[formcontrolname="eid"], input[formcontrolname="enrolmentId"], input[id="eid"], input[placeholder*="Enrolment ID"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid', timeout:'25'},
+      {type:'scroll', value:'200'},
+      {type:'type_slow', selector:'input[formcontrolname="eid"], input[formcontrolname="enrolmentId"], input[id="eid"], input[placeholder*="Enrolment ID"], input[placeholder*="Enrolment"], input[placeholder*="enrolment"], #eid', value:'{enrolment_id}', delay_ms:'80'},
+      {type:'wait', value:'1'},
+      {type:'ask_captcha', caption:'🔐 Security code reply karo:', crop_x:'250', crop_y:'350', crop_w:'500', crop_h:'150', var_name:'captcha'},
+      {type:'type_slow', selector:captchaSel, value:'{captcha}', delay_ms:'60'},
+      {type:'wait', value:'0.5'},
+      {type:'click', selector:submitSel, stop_on_error:false},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
       {type:'screenshot', caption:'Status result', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.status-result, .result-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
+      {type:'get_text', selector:resultSel, var_name:'result'},
     ],
     lock: [
       {type:'set_var', var_name:'aadhaar_no', value:'{query_arg}'},
       {type:'open', value:'https://myaadhaar.uidai.gov.in/lock-unlock-uid', stop_on_error:true},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
-      {type:'wait_element', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', timeout:'20'},
-      {type:'fill', selector:'input[formcontrolname="aadhaarId"], input[placeholder*="Aadhaar"], input[placeholder*="aadhaar"], #aadhaarNo', value:'{aadhaar_no}'},
-      {type:'ask_captcha', caption:'🔐 Security captcha reply karo:', crop_x:'300', crop_y:'250', crop_w:'400', crop_h:'120', var_name:'captcha'},
-      {type:'fill', selector:'input[formcontrolname="captcha"], input[placeholder*="security"], input[name="captcha"], #captcha', value:'{captcha}'},
-      {type:'click', selector:'button[type="submit"], .btn-primary, .send-otp-btn'},
-      {type:'wait_load', value:'networkidle', timeout:'20'},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
+      {type:'wait_element', selector:aadhaarSel, timeout:'25'},
+      {type:'scroll', value:'200'},
+      {type:'type_slow', selector:aadhaarSel, value:'{aadhaar_no}', delay_ms:'80'},
+      {type:'wait', value:'1'},
+      {type:'ask_captcha', caption:'🔐 Security captcha reply karo:', crop_x:'250', crop_y:'350', crop_w:'500', crop_h:'150', var_name:'captcha'},
+      {type:'type_slow', selector:captchaSel, value:'{captcha}', delay_ms:'60'},
+      {type:'wait', value:'0.5'},
+      {type:'click', selector:submitSel, stop_on_error:false},
+      {type:'wait_load', value:'networkidle', timeout:'25'},
+      {type:'wait', value:'2'},
       {type:'screenshot', caption:'OTP sent screen', send_ss:true, delete_after:false},
-      {type:'get_text', selector:'.otp-msg, .info-msg, mat-card, .ng-star-inserted, .alert, h2', var_name:'result'},
+      {type:'get_text', selector:resultSel, var_name:'result'},
     ],
   };
   (steps[tpl]||[]).forEach(s => laAddBrowserStep(bsContId, s));
