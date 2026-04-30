@@ -3356,11 +3356,16 @@ if(isset($_GET['webhook_bot'])){
 
                     $kb=injectOwnerEditBtn($kb,$p['id']??'',$uid,$s['adminId']??'');
 
-                    if(!empty(trim($p['sticker_id']??''))){
-                        $stkId=pv($p['sticker_id'],$u,$s,$query,$p['custom_vars']??'');
-                        sendSticker($chatId,trim($stkId),$token);
-                        usleep(300000);
+                    // Send sticker(s) — supports both legacy sticker_id and new sticker_ids array
+                    $allStickerIds=[];
+                    if(!empty(trim($p['sticker_id']??'')))$allStickerIds[]=$p['sticker_id'];
+                    if(!empty($p['sticker_ids'])&&is_array($p['sticker_ids']))foreach($p['sticker_ids'] as $sid){$sid=trim((string)$sid);if($sid&&!in_array($sid,$allStickerIds))$allStickerIds[]=$sid;}
+                    foreach($allStickerIds as $i=>$stkRaw){
+                        $stkId=pv($stkRaw,$u,$s,$query,$p['custom_vars']??'');
+                        if(trim($stkId))sendSticker($chatId,trim($stkId),$token);
+                        if($i<count($allStickerIds)-1)usleep(300000);
                     }
+                    if(!empty($allStickerIds))usleep(300000);
 
                     if(!empty(trim($p['document_url']??''))){
                         $docUrl=pv($p['document_url'],$u,$s,$query,$p['custom_vars']??'',null,null,$db);
@@ -3763,7 +3768,8 @@ if($page==='api'){
             saveDB($actId,$db);jout(['ok'=>true]);break;
         case 'save_page':
             if(!$actId)jout(['ok'=>false,'error'=>'No Bot']);
-            $np=['id'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',$body['id']?:uniqid('pg_'))),'trigger'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',$body['trigger']??'')),'type'=>$body['type']??'text','is_free_text'=>(bool)($body['is_free_text']??false),'ft_chat_mode'=>$body['ft_chat_mode']??'both','ft_mention_only'=>(bool)($body['ft_mention_only']??false),'ft_access_control'=>$body['ft_access_control']??'','force_join'=>(bool)($body['force_join']??false),'access_control'=>$body['access_control']??'','fallback_page'=>$body['fallback_page']??'','requires_credit'=>(bool)($body['requires_credit']??false),'media_main'=>$body['media_main']??'','media_missing'=>$body['media_missing']??'','media_error'=>$body['media_error']??'','document_url'=>$body['document_url']??'','custom_vars'=>$body['custom_vars']??'','text'=>$body['text']??'','api_url'=>$body['api_url']??'','json_root'=>$body['json_root']??'','not_found'=>$body['not_found']??'','msg_missing'=>$body['msg_missing']??'','msg_loading'=>$body['msg_loading']??'','loading_steps'=>$body['loading_steps']??[],'api_timeout'=>(int)($body['api_timeout']??15),'api_retry'=>(bool)($body['api_retry']??false),'buttons'=>$body['buttons']??[],'curl_url'=>$body['curl_url']??'','curl_method'=>$body['curl_method']??'POST','curl_headers'=>$body['curl_headers']??'','curl_body'=>$body['curl_body']??'','curl_response_path'=>$body['curl_response_path']??'','curl_timeout'=>(int)($body['curl_timeout']??120),'browser_var_names'=>$body['browser_var_names']??'','browser_done_msg'=>$body['browser_done_msg']??'✅ Done!','browser_steps'=>$body['browser_steps']??[],'sticker_id'=>$body['sticker_id']??''];
+            $np=['id'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',$body['id']?:uniqid('pg_'))),'trigger'=>strtolower(preg_replace('/[^a-zA-Z0-9_]/','_',$body['trigger']??'')),'type'=>$body['type']??'text','is_free_text'=>(bool)($body['is_free_text']??false),'ft_chat_mode'=>$body['ft_chat_mode']??'both','ft_mention_only'=>(bool)($body['ft_mention_only']??false),'ft_access_control'=>$body['ft_access_control']??'','force_join'=>(bool)($body['force_join']??false),'access_control'=>$body['access_control']??'','fallback_page'=>$body['fallback_page']??'','requires_credit'=>(bool)($body['requires_credit']??false),'media_main'=>$body['media_main']??'','media_missing'=>$body['media_missing']??'','media_error'=>$body['media_error']??'','document_url'=>$body['document_url']??'','custom_vars'=>$body['custom_vars']??'','text'=>$body['text']??'','api_url'=>$body['api_url']??'','json_root'=>$body['json_root']??'','not_found'=>$body['not_found']??'','msg_missing'=>$body['msg_missing']??'','msg_loading'=>$body['msg_loading']??'','loading_steps'=>$body['loading_steps']??[],'api_timeout'=>(int)($body['api_timeout']??15),'api_retry'=>(bool)($body['api_retry']??false),'buttons'=>$body['buttons']??[],'curl_url'=>$body['curl_url']??'','curl_method'=>$body['curl_method']??'POST','curl_headers'=>$body['curl_headers']??'','curl_body'=>$body['curl_body']??'','curl_response_path'=>$body['curl_response_path']??'','curl_timeout'=>(int)($body['curl_timeout']??120),'browser_var_names'=>$body['browser_var_names']??'','browser_done_msg'=>$body['browser_done_msg']??'✅ Done!','browser_steps'=>$body['browser_steps']??[],'sticker_id'=>$body['sticker_id']??'','sticker_ids'=>array_values(array_filter(array_map('trim',is_array($body['sticker_ids']??null)?$body['sticker_ids']:[])))];
+
             if(!$np['id'])jout(['ok'=>false,'error'=>'ID required']);
             $f=false;foreach($db['pages'] as $ki=>$kv){if($kv['id']==$np['id']){$db['pages'][$ki]=$np;$f=true;break;}}
             if(!$f)$db['pages'][]=$np;saveDB($actId,$db);jout(['ok'=>true]);break;
@@ -6196,17 +6202,33 @@ td{padding:9px 11px;vertical-align:middle;}
     </div>
   </div>
 
-  <!-- Sticker ID field -->
+  <!-- Sticker IDs field (multi-sticker) -->
 
   <div class="bb" style="padding:11px;border-color:var(--y)">
-    <label class="fl" style="color:var(--y)">🌟 STICKER ID (optional)</label>
-
-    <div style="font-size:10px;color:var(--td);margin-bottom:6px">Yeh page trigger hone par sticker bhi bhejega. Library se pick karo ya file_id manually daalo.</div>
-
-    <div style="display:flex;gap:7px;flex-wrap:wrap">
-      <input type="text" id="pb-sticker-id" class="fi" placeholder="file_id — Library → 🌟 Sticker Library se copy karo" style="flex:1">
-      <button class="btn bw bsm" onclick="pickStickerForPage()">📚 Library</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+      <label class="fl" style="color:var(--y);margin-bottom:0">🌟 STICKERS (optional)</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn bw bsm" onclick="openPbStickerPicker()" style="font-size:11px">⭐ Library se Pick</button>
+        <button class="btn bg bsm" onclick="pbAddStickerManual()" style="font-size:11px">➕ Manual Add</button>
+      </div>
     </div>
+    <div style="font-size:10px;color:var(--td);margin-bottom:8px">Page trigger hone par yeh stickers bheje jaayenge (premium stickers bhi). Ek ya zyada add karo.</div>
+
+    <!-- Chips container -->
+    <div id="pb-sticker-chips" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;background:var(--s2);border:1px solid var(--b);border-radius:7px;padding:7px 8px;margin-bottom:6px"></div>
+
+    <!-- Manual add row (hidden by default) -->
+    <div id="pb-sticker-manual-row" style="display:none;margin-top:6px">
+      <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="pb-sticker-manual-id" class="fi" placeholder="file_id paste karo..." style="flex:2;min-width:180px">
+        <input type="text" id="pb-sticker-manual-label" class="fi" placeholder="Label (optional)" style="flex:1;min-width:100px">
+        <button class="btn bp bsm" onclick="pbConfirmManualSticker()">Add</button>
+        <button class="btn bd bsm" onclick="g('pb-sticker-manual-row').style.display='none'">✕</button>
+      </div>
+    </div>
+
+    <!-- Hidden legacy field (kept for backwards compat) -->
+    <input type="hidden" id="pb-sticker-id">
   </div>
 
   <!-- Message template -->
@@ -6279,6 +6301,26 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="btn bg bsm" onclick="addBtn()" style="margin-top:7px">+ Add Button</button>
   </div>
   <button class="btn bp" onclick="savePage()" style="width:100%;margin-top:14px;padding:11px;font-size:14px">💾 SAVE PAGE</button>
+</div></div>
+
+<!-- STICKER PICKER MODAL (for Page Builder) -->
+<div class="mbox" id="m-pb-sticker-picker"><div class="modal" style="max-width:680px">
+  <button class="mc" onclick="closeModal('m-pb-sticker-picker')">✕</button>
+  <h3 style="color:var(--y);margin-bottom:12px;font-family:Orbitron;font-size:12px">⭐ STICKER LIBRARY — SELECT KARO</h3>
+
+  <div style="display:flex;gap:7px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+    <input type="text" id="pb-spk-search" class="fi" placeholder="🔍 Label se dhundho..." oninput="pbStickerPickerFilter()" style="flex:1;min-width:140px;font-size:12px">
+    <button class="btn bg bsm" onclick="pbLoadStickerPickerGrid()">🔄 Refresh</button>
+    <button class="btn bp bsm" onclick="pbStickerPickerConfirm()" id="pb-spk-confirm-btn" style="display:none">✅ Add Selected</button>
+  </div>
+
+  <div id="pb-spk-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px;max-height:380px;overflow-y:auto;padding-right:3px">
+    <div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">⏳ Loading...</div>
+  </div>
+
+  <div style="margin-top:10px;font-size:10px;color:var(--td);font-family:'Share Tech Mono'">
+    💡 Click karo select/deselect — multiple stickers select kar sakte ho. <b style="color:var(--y)">⭐ PREMIUM</b> stickers fully supported.
+  </div>
 </div></div>
 
   <!-- PROMO BOT PANEL -->
@@ -6974,6 +7016,7 @@ function openCmdModal(){
   ['pb-cr','pb-retry','pb-ccr','pb-ft-on','pb-ft-mention','pb-fj'].forEach(id=>{const el=g(id);if(el)el.checked=false;});
   if(g('pb-ft-chatmode'))g('pb-ft-chatmode').value='both';
   g('ft-opts-row').classList.remove('show');g('ft-opts-row').style.display='none';
+  _pbStickerIds=[];pbRenderStickerChips();
   g('btnc').innerHTML='';g('lsc').innerHTML='';g('bsteps-c').innerHTML='';onType();openModal('m-builder');
 }
 window.PAGES=[];
@@ -7001,6 +7044,24 @@ function editPage(id){
   if(g('pb-bv-done'))g('pb-bv-done').value=c.browser_done_msg||'✅ Done!';
   g('bsteps-c').innerHTML='';if(c.browser_steps)c.browser_steps.forEach(s=>addBrowserStep(s));
   if(g('pb-sticker-id'))g('pb-sticker-id').value=c.sticker_id||'';
+  // Load sticker_ids for multi-sticker support (merge legacy sticker_id too)
+  (async()=>{
+    _pbStickerIds=[];
+    let stickerIdsToLoad=[];
+    if(c.sticker_ids&&Array.isArray(c.sticker_ids)&&c.sticker_ids.length)stickerIdsToLoad=c.sticker_ids;
+    else if(c.sticker_id)stickerIdsToLoad=[c.sticker_id];
+    if(stickerIdsToLoad.length){
+      // Try to enrich with library labels
+      let libMap={};
+      if(_pbStickerLib.length)_pbStickerLib.forEach(s=>{libMap[s.file_id]=s;});
+      else{const lr=await api('get_stickers');if(lr.ok&&lr.data){_pbStickerLib=lr.data;_pbStickerLib.forEach(s=>{libMap[s.file_id]=s;});}}
+      stickerIdsToLoad.forEach(sid=>{
+        const lib=libMap[sid];
+        if(!_pbStickerIds.find(s=>s.file_id===sid))_pbStickerIds.push(lib?{file_id:lib.file_id,label:lib.label||'Sticker',is_premium:!!lib.is_premium,is_animated:!!lib.is_animated}:{file_id:sid,label:'Sticker ('+sid.substring(0,8)+'…)',is_premium:false,is_animated:false});
+      });
+    }
+    pbRenderStickerChips();
+  })();
   const isFt=c.is_free_text||false;
   if(g('pb-ft-on'))g('pb-ft-on').checked=isFt;
   onFtToggle(g('pb-ft-on'));
@@ -7062,7 +7123,8 @@ async function savePage(){
       browser_var_names:g('pb-bv-names')?.value||'',
       browser_done_msg:g('pb-bv-done')?.value||'✅ Done!',
       browser_steps:getBrowserSteps(),
-      sticker_id:g('pb-sticker-id')?.value?.trim()||''
+      sticker_id:_pbStickerIds.length?_pbStickerIds[0].file_id:'',
+      sticker_ids:_pbStickerIds.map(s=>s.file_id)
     };
     if(!d.id)return toast('Page ID required!','error');
     const r=await api('save_page',d);if(r.ok){toast('✅ Saved!','success');closeModal('m-builder');loadPages();}else toast(r.error||'Error','error');
@@ -7824,16 +7886,110 @@ function showStickerHelp(){
     '   → "Paste file_id in the "Sticker ID" field\n'+
     '   → Bot will auto-send the sticker when the page is triggered');
 }
-async function pickStickerForPage(){
-  const r=await api('get_stickers');
-  if(!r.ok||!r.data||!r.data.length){toast('Library is empty! Please add a sticker first.','error');return;}
-  const opts=r.data.map((s,i)=>`${i+1}. ${s.is_premium?'⭐':s.is_animated?'🎬':'📌'} ${s.label}`).join('\n');
-  const choice=prompt('Select a sticker (number daalo):\n\n'+opts);
-  if(!choice)return;
-  const idx=parseInt(choice)-1;
-  if(idx>=0&&idx<r.data.length){if(g('pb-sticker-id'))g('pb-sticker-id').value=r.data[idx].file_id;toast('✅ Sticker select ho gaya!','success');}
-  else toast('Invalid choice','error');
+// ── PAGE BUILDER: MULTI-STICKER SUPPORT ──────────────────────────────────────
+
+let _pbStickerIds=[]; // array of {file_id, label, is_premium, is_animated}
+let _pbStickerLib=[]; // full library cache
+let _pbStickerPickerSel=new Set(); // selected file_ids in picker modal
+
+function pbRenderStickerChips(){
+  const c=g('pb-sticker-chips');if(!c)return;
+  if(!_pbStickerIds.length){c.innerHTML='<span style="color:var(--td);font-size:11px;font-family:\'Share Tech Mono\'">Koi sticker nahi — Library se pick karo ya manually add karo</span>';return;}
+  c.innerHTML='';
+  _pbStickerIds.forEach((s,i)=>{
+    const badge=s.is_premium?'⭐ PREMIUM':s.is_animated?'🎬 ANIM':'📌 STATIC';
+    const chip=document.createElement('div');
+    chip.style.cssText='display:inline-flex;align-items:center;gap:6px;background:rgba(255,214,0,.1);border:1px solid rgba(255,214,0,.45);border-radius:20px;padding:4px 10px 4px 8px;font-size:11px;color:var(--t);max-width:220px;';
+    chip.innerHTML=`<span style="color:${s.is_premium?'#f9c74f':s.is_animated?'#4cc9f0':'#adb5bd'};font-size:13px">${s.is_premium?'⭐':s.is_animated?'🎬':'📌'}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px" title="${s.label||s.file_id}">${s.label||s.file_id.substring(0,16)+'…'}</span><button type="button" onclick="pbRemoveSticker(${i})" style="background:none;border:none;cursor:pointer;color:var(--r);font-size:13px;padding:0;line-height:1;margin-left:2px" title="Remove">✕</button>`;
+    c.appendChild(chip);
+  });
 }
+function pbRemoveSticker(idx){
+  _pbStickerIds.splice(idx,1);
+  pbRenderStickerChips();
+}
+function pbAddStickerManual(){
+  const row=g('pb-sticker-manual-row');
+  if(row)row.style.display=row.style.display==='none'?'block':'none';
+  const inp=g('pb-sticker-manual-id');if(inp)inp.focus();
+}
+function pbConfirmManualSticker(){
+  const fid=(g('pb-sticker-manual-id')?.value||'').trim();
+  if(!fid)return toast('file_id daalo pehle','error');
+  const label=(g('pb-sticker-manual-label')?.value||'').trim()||'Manual Sticker';
+  if(_pbStickerIds.find(s=>s.file_id===fid))return toast('Yeh sticker already add hai','warn');
+  _pbStickerIds.push({file_id:fid,label,is_premium:false,is_animated:false});
+  pbRenderStickerChips();
+  if(g('pb-sticker-manual-id'))g('pb-sticker-manual-id').value='';
+  if(g('pb-sticker-manual-label'))g('pb-sticker-manual-label').value='';
+  g('pb-sticker-manual-row').style.display='none';
+  toast('✅ Sticker added!','success');
+}
+async function openPbStickerPicker(){
+  _pbStickerPickerSel.clear();
+  openModal('m-pb-sticker-picker');
+  await pbLoadStickerPickerGrid();
+}
+async function pbLoadStickerPickerGrid(){
+  const grid=g('pb-spk-grid');if(!grid)return;
+  grid.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">⏳ Loading library...</div>';
+  const r=await api('get_stickers');
+  if(!r.ok||!r.data||!r.data.length){
+    grid.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Library empty hai.<br><small>Sticker Library mein pehle stickers add karo.</small></div>';
+    _pbStickerLib=[];return;
+  }
+  _pbStickerLib=r.data;
+  pbRenderStickerPickerGrid(_pbStickerLib);
+}
+function pbRenderStickerPickerGrid(list){
+  const grid=g('pb-spk-grid');if(!grid)return;
+  if(!list.length){grid.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">🔍 Koi match nahi.</div>';return;}
+  grid.innerHTML='';
+  list.forEach(stk=>{
+    const isSel=_pbStickerPickerSel.has(stk.file_id);
+    const alreadyAdded=_pbStickerIds.some(s=>s.file_id===stk.file_id);
+    const card=document.createElement('div');
+    card.style.cssText=`position:relative;background:${isSel?'rgba(255,214,0,.18)':'var(--s2)'};border:2px solid ${isSel?'rgba(255,214,0,.8)':alreadyAdded?'rgba(57,255,20,.5)':'var(--b)'};border-radius:9px;padding:10px 8px;cursor:${alreadyAdded?'default':'pointer'};transition:all .15s;user-select:none;`;
+    const badge=stk.is_premium
+      ?'<span style="background:#f9c74f;color:#000;border-radius:3px;font-size:8px;padding:1px 4px;font-weight:bold">⭐ PREMIUM</span>'
+      :stk.is_animated
+      ?'<span style="background:#4cc9f0;color:#000;border-radius:3px;font-size:8px;padding:1px 4px">🎬 ANIM</span>'
+      :'<span style="background:#adb5bd;color:#000;border-radius:3px;font-size:8px;padding:1px 4px">📌 STATIC</span>';
+    const checkmark=isSel?'<div style="position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:50%;background:#f9c74f;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold">✓</div>':'<div style="position:absolute;top:6px;right:6px;width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.2)"></div>';
+    card.innerHTML=`${checkmark}<div style="font-size:28px;text-align:center;margin-bottom:5px">${stk.is_premium?'💎':stk.is_animated?'✨':'🌟'}</div>${badge}<div style="font-size:11px;font-weight:600;color:var(--t);margin-top:5px;word-break:break-word;line-height:1.3">${stk.label||'Sticker'}</div><div style="font-size:8px;color:var(--td);font-family:'Share Tech Mono';margin-top:3px;word-break:break-all">${stk.file_id.substring(0,20)}…</div>${alreadyAdded?'<div style="font-size:9px;color:var(--g);margin-top:3px">✅ Already added</div>':''}`;
+    if(!alreadyAdded){
+      card.onclick=()=>{
+        if(_pbStickerPickerSel.has(stk.file_id)){_pbStickerPickerSel.delete(stk.file_id);}else{_pbStickerPickerSel.add(stk.file_id);}
+        pbRenderStickerPickerGrid(list);
+        const confirmBtn=g('pb-spk-confirm-btn');
+        if(confirmBtn)confirmBtn.style.display=_pbStickerPickerSel.size>0?'inline-flex':'none';
+      };
+      card.onmouseenter=()=>{if(!_pbStickerPickerSel.has(stk.file_id))card.style.background='rgba(255,214,0,.08)';};
+      card.onmouseleave=()=>{if(!_pbStickerPickerSel.has(stk.file_id))card.style.background='var(--s2)';};
+    }
+    grid.appendChild(card);
+  });
+  const confirmBtn=g('pb-spk-confirm-btn');
+  if(confirmBtn)confirmBtn.style.display=_pbStickerPickerSel.size>0?'inline-flex':'none';
+}
+function pbStickerPickerFilter(){
+  const q=(g('pb-spk-search')?.value||'').toLowerCase().trim();
+  pbRenderStickerPickerGrid(q?_pbStickerLib.filter(s=>(s.label||'').toLowerCase().includes(q)||(s.is_premium&&'premium'.includes(q))||(s.is_animated&&'animated'.includes(q))):_pbStickerLib);
+}
+function pbStickerPickerConfirm(){
+  _pbStickerLib.forEach(stk=>{
+    if(_pbStickerPickerSel.has(stk.file_id)&&!_pbStickerIds.some(s=>s.file_id===stk.file_id)){
+      _pbStickerIds.push({file_id:stk.file_id,label:stk.label||'Sticker',is_premium:!!stk.is_premium,is_animated:!!stk.is_animated});
+    }
+  });
+  pbRenderStickerChips();
+  _pbStickerPickerSel.clear();
+  closeModal('m-pb-sticker-picker');
+  toast('✅ Sticker(s) added!','success');
+}
+
+// Legacy alias kept for any old code references
+async function pickStickerForPage(){openPbStickerPicker();}
 
 // PREMIUM EMOJI LIBRARY JS — REDESIGNED
 
