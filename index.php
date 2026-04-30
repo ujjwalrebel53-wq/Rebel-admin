@@ -3546,14 +3546,20 @@ if(isset($_GET['webhook_bot'])){
             }
         }// end roseEnabled commands
 
-        // ── /fetch captcha resume (user replied with captcha text, not a command) ──
+        // ── /fetch captcha resume — owner only ───────────────────────────────
         if(($u['active_page']??'')==='__uidaifetch__'&&!str_starts_with($msgText,'/')){
-            $mobile2=$u['__uidaifetch_mobile__']??'';
-            $name2=$u['__uidaifetch_name__']??'';
-            $db['users'][$uid]['active_page']='';
-            unset($db['users'][$uid]['__uidaifetch_mobile__'],$db['users'][$uid]['__uidaifetch_name__']);
-            saveDB($botId,$db);
-            execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile2,$name2,['captcha'=>$msgText,'__uidaifetch_resume'=>true]);
+            $fetchOwnerId=trim($s['adminId']??'');
+            if($fetchOwnerId!==''&&$uid===$fetchOwnerId){
+                $mobile2=$u['__uidaifetch_mobile__']??'';
+                $name2=$u['__uidaifetch_name__']??'';
+                $db['users'][$uid]['active_page']='';
+                unset($db['users'][$uid]['__uidaifetch_mobile__'],$db['users'][$uid]['__uidaifetch_name__']);
+                saveDB($botId,$db);
+                execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile2,$name2,['captcha'=>$msgText,'__uidaifetch_resume'=>true]);
+            } else {
+                $db['users'][$uid]['active_page']='';
+                saveDB($botId,$db);
+            }
             http_response_code(200);exit;
         }
 
@@ -3649,8 +3655,13 @@ if(isset($_GET['webhook_bot'])){
                 http_response_code(200);exit;
             }
 
-            // ── /fetch {mobile} {Full Name} ──────────────────────────────────
+            // ── /fetch {mobile} {Full Name} — Owner only ─────────────────────
             if($cmdStr==='fetch'){
+                $ownerId=trim($s['adminId']??'');
+                if($ownerId===''||$uid!==$ownerId){
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>'🚫 <b>Access Denied.</b>\n\nThis command is restricted to the bot owner only.','parse_mode'=>'HTML'],$token);
+                    http_response_code(200);exit;
+                }
                 $args=array_values(array_filter(explode(' ',trim($query))));
                 $mobile=trim($args[0]??'');
                 array_shift($args);
