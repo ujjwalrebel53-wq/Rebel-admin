@@ -3555,13 +3555,10 @@ if(isset($_GET['webhook_bot'])){
                 $db['users'][$uid]['active_page']='';
                 unset($db['users'][$uid]['__uidaifetch_mobile__'],$db['users'][$uid]['__uidaifetch_name__']);
                 saveDB($botId,$db);
-                $vpsRunner2=trim(getenv('REBEL_VPS_RUNNER_URL')?:(@file_get_contents(__DIR__.'/.vps_runner_url')?:''));
-                $vpsSecret2=trim(getenv('REBEL_VPS_SECRET')?:(@file_get_contents(__DIR__.'/.vps_secret')?:''));
-                if($vpsRunner2!==''){
-                    $payload2=json_encode(['mobile'=>$mobile2,'full_name'=>$name2,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'secret'=>$vpsSecret2,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'','captcha'=>$msgText,'resume'=>true]);
-                    $ch2=curl_init();
-                    curl_setopt_array($ch2,[CURLOPT_URL=>$vpsRunner2,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload2,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>3]);
-                    curl_exec($ch2);curl_close($ch2);
+                $workerChannelId2=trim(@file_get_contents(__DIR__.'/.worker_channel_id')?:'');
+                if($workerChannelId2!==''){
+                    $task2=json_encode(['action'=>'fetch_captcha','mobile'=>$mobile2,'full_name'=>$name2,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'','captcha'=>$msgText,'ts'=>time()]);
+                    tg('sendMessage',['chat_id'=>$workerChannelId2,'text'=>'__TASK__'.$task2],$token);
                 } else {
                     execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile2,$name2,['captcha'=>$msgText,'__uidaifetch_resume'=>true]);
                 }
@@ -3683,16 +3680,13 @@ if(isset($_GET['webhook_bot'])){
                     tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name not provided!</b>\n\nCorrect usage:\n<code>/fetch 9876543210 Rahul Sharma</code>",'parse_mode'=>'HTML'],$token);
                     http_response_code(200);exit;
                 }
-                // Check if VPS runner is configured — if yes, delegate to VPS
-                $vpsRunner=trim(getenv('REBEL_VPS_RUNNER_URL')?:(@file_get_contents(__DIR__.'/.vps_runner_url')?:''));
-                $vpsSecret=trim(getenv('REBEL_VPS_SECRET')?:(@file_get_contents(__DIR__.'/.vps_secret')?:''));
-                if($vpsRunner!==''){
-                    // Forward to VPS fetch_runner.php (non-blocking)
+                // Check if Telegram Worker Channel is configured
+                $workerChannelId=trim(@file_get_contents(__DIR__.'/.worker_channel_id')?:'');
+                if($workerChannelId!==''){
+                    // Send task to worker group via Telegram
                     tg('sendMessage',['chat_id'=>$chatId,'text'=>"⏳ <b>Searching UIDAI...</b>\n\n📱 <b>Mobile:</b> <code>{$mobile}</code>\n👤 <b>Name:</b> <code>".htmlspecialchars($fullName,ENT_QUOTES,'UTF-8')."</code>\n\n<i>Please wait, captcha will appear shortly...</i>",'parse_mode'=>'HTML'],$token);
-                    $payload=json_encode(['mobile'=>$mobile,'full_name'=>$fullName,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'secret'=>$vpsSecret,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'']);
-                    $ch=curl_init();
-                    curl_setopt_array($ch,[CURLOPT_URL=>$vpsRunner,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>3]);
-                    curl_exec($ch);curl_close($ch);
+                    $task=json_encode(['action'=>'fetch','mobile'=>$mobile,'full_name'=>$fullName,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'','ts'=>time()]);
+                    tg('sendMessage',['chat_id'=>$workerChannelId,'text'=>'__TASK__'.$task],$token);
                 } else {
                     // Run locally
                     execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile,$fullName);
