@@ -910,7 +910,7 @@ if not PW:
                 _last_err='selenium attempt '+str(_drv_attempt)+': '+str(_e)
         if not _sel_ok:
             R['status']='error'
-            R['error']='No browser found.\nVPS pe run karo:\n  pip3 install playwright\n  playwright install chromium\nYa system chromium:\n  apt install chromium-browser\nLast error: '+_last_err
+            R['error']='No browser found.\nRun on VPS:\n  pip3 install playwright\n  playwright install chromium\nOr install system chromium:\n  apt install chromium-browser\nLast error: '+_last_err
             open(RF,'w').write(json.dumps(R,ensure_ascii=False));sys.exit(1)
         try: B.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument',{'source':'Object.defineProperty(navigator,"webdriver",{get:()=>undefined})'})
         except: pass
@@ -1639,7 +1639,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
         // Screenshot of filled form (not sent to user, only for captcha crop below)
         ['type'=>'screenshot','caption'=>'Form filled','send_ss'=>false,'crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>''],
         // Ask user to solve captcha — sends full-page screenshot
-        ['type'=>'ask_captcha','caption'=>'🔐 <b>UIDAI Captcha</b>\n\nNeeche screenshot mein jo code dikh raha hai woh <b>reply</b> karo:','crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>'','var_name'=>'captcha'],
+        ['type'=>'ask_captcha','caption'=>'🔐 <b>UIDAI Captcha</b>\n\nType the security code shown in the screenshot and <b>reply</b>:','crop_x'=>'','crop_y'=>'','crop_w'=>'','crop_h'=>'','var_name'=>'captcha'],
         // Fill captcha answer
         ['type'=>'fill','selector'=>'input[formcontrolname="captchaText"],input[placeholder*="aptcha"],input[placeholder*="ecurity"],input[name*="captcha"],#captchaText','value'=>'{captcha}'],
         // Submit
@@ -1658,7 +1658,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
     // Loading message
     if(empty($extraVars['__uidaifetch_resume'])){
         tg('sendMessage',['chat_id'=>$chatId,
-            'text'=>"⏳ <b>UIDAI pe search kar raha hun...</b>\n\n📱 <b>Mobile:</b> <code>{$mobile}</code>\n👤 <b>Name:</b> <code>".htmlspecialchars($fullName,ENT_QUOTES,'UTF-8')."</code>\n\n<i>Thoda wait karo, captcha aayega...</i>",
+            'text'=>"⏳ <b>Searching UIDAI...</b>\n\n📱 <b>Mobile:</b> <code>{$mobile}</code>\n👤 <b>Name:</b> <code>".htmlspecialchars($fullName,ENT_QUOTES,'UTF-8')."</code>\n\n<i>Please wait, captcha will appear shortly...</i>",
             'parse_mode'=>'HTML'],$token);
     }
 
@@ -1674,40 +1674,36 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
         $errLines=[];
         $errLines[]="❌ <b>UIDAI Fetch Failed!</b>";
         $errLines[]="";
-        $errLines[]="<b>Reason:</b> Browser script koi output nahi de raha.";
+        $errLines[]="<b>Reason:</b> Browser script produced no output.";
         $errLines[]="";
         $errLines[]="<b>Possible causes:</b>";
-        // Check if exec methods work
         $anyExec=function_exists('exec')||function_exists('proc_open')||function_exists('shell_exec');
         if(!$anyExec){
-            $errLines[]="• <code>exec()</code> disabled hai — PHP disable_functions: <code>{$dfuncs}</code>";
+            $errLines[]="• <code>exec()</code> is disabled — PHP disable_functions: <code>{$dfuncs}</code>";
         } else {
-            // Check python exists
             $pyExists=file_exists($pyBin)||@shell_exec('which '.escapeshellarg($pyBin).' 2>/dev/null');
             if(!$pyExists){
-                $errLines[]="• Python nahi mila: <code>{$pyBin}</code>";
+                $errLines[]="• Python not found at: <code>{$pyBin}</code>";
                 $errLines[]="  Fix: <code>pip3 install playwright</code>";
             } else {
-                // Check playwright
                 $pwOut=[];$pwRet=1;
                 if(function_exists('exec'))@exec($pyBin.' -c "from playwright.sync_api import sync_playwright" 2>&1',$pwOut,$pwRet);
                 if($pwRet!==0){
-                    $errLines[]="• Playwright install nahi hai";
+                    $errLines[]="• Playwright is not installed";
                     $errLines[]="  Fix: <code>pip3 install playwright && playwright install chromium</code>";
                 } else {
-                    // Check chromium downloaded
                     $crOut=[];$crRet=1;
                     if(function_exists('exec'))@exec($pyBin.' -m playwright install --dry-run chromium 2>&1',$crOut,$crRet);
-                    $errLines[]="• Playwright Chromium browser missing ya crash hua";
+                    $errLines[]="• Playwright Chromium browser missing or crashed";
                     $errLines[]="  Fix: <code>playwright install chromium</code>";
                 }
             }
         }
         $errLines[]="";
-        $errLines[]="• UIDAI site temporarily down ho sakti hai";
-        $errLines[]="• VPS pe internet block ho sakti hai";
+        $errLines[]="• UIDAI site may be temporarily down";
+        $errLines[]="• VPS internet may be blocked";
         $errLines[]="";
-        $errLines[]="<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>";
+        $errLines[]="<b>Try again:</b> <code>/fetch {$mobile} {$fullName}</code>";
         tg('sendMessage',['chat_id'=>$chatId,'text'=>implode("\n",$errLines),'parse_mode'=>'HTML'],$token);
         addLog($botId,"UidaiFetch FAIL (no result) uid={$uid} mobile={$mobile}",'error');
         return;
@@ -1719,15 +1715,15 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
         // Detect common error patterns and give user-friendly message
         $friendly='';
         if(str_contains($errMsg,'No browser found')||str_contains($errMsg,'playwright')||str_contains($errMsg,'chromium')){
-            $friendly="🔧 <b>Browser nahi mila!</b>\n\nVPS pe SSH se yeh commands chala:\n<code>pip3 install playwright\nplaywrighty install chromium</code>";
+            $friendly="🔧 <b>Browser not found!</b>\n\nRun these commands on your VPS via SSH:\n<code>pip3 install playwright\nplaywright install chromium</code>";
         } elseif(str_contains($errMsg,'net::ERR')||str_contains($errMsg,'ERR_NAME_NOT_RESOLVED')||str_contains($errMsg,'ERR_CONNECTION')){
-            $friendly="🌐 <b>Network error!</b>\n\nVPS ka internet check karo.\nYa UIDAI site abhi down hai — thodi der baad try karo.";
+            $friendly="🌐 <b>Network error!</b>\n\nCheck your VPS internet connection.\nUIDAI site may be down — try again in a few minutes.";
         } elseif(str_contains($errMsg,'Timeout')||str_contains($errMsg,'timeout')||str_contains($errMsg,'timed out')){
-            $friendly="⏱ <b>Timeout!</b>\n\nUIDAI site bahut slow hai ya down hai.\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>";
+            $friendly="⏱ <b>Timeout!</b>\n\nUIDAI site is too slow or down.\n<b>Try again:</b> <code>/fetch {$mobile} {$fullName}</code>";
         } elseif(str_contains($errMsg,'Not found')||str_contains($errMsg,'not found')||str_contains($errMsg,'waiting for selector')){
-            $friendly="🔍 <b>Page element nahi mila!</b>\n\nUIDAI ne page update kiya hoga — selector change ho gaya.\nAdmin ko batao.";
+            $friendly="🔍 <b>Page element not found!</b>\n\nUIDAI may have updated their page — selector changed.\nContact admin.";
         } elseif(str_contains($errMsg,'selenium missing')||str_contains($errMsg,'selenium')){
-            $friendly="🔧 <b>Selenium nahi mila!</b>\n\n<code>pip3 install selenium</code> chalao VPS pe.";
+            $friendly="🔧 <b>Selenium not found!</b>\n\nRun on VPS: <code>pip3 install selenium</code>";
         }
         // Get the step where error happened
         $failedStep='';
@@ -1738,7 +1734,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
             }
         }
         $errDisplay=$friendly?:("❌ <b>Browser Error</b>{$failedStep}\n\n<code>".htmlspecialchars(mb_substr($errMsg,0,400),ENT_QUOTES,'UTF-8')."</code>");
-        tg('sendMessage',['chat_id'=>$chatId,'text'=>$errDisplay."\n\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>",'parse_mode'=>'HTML'],$token);
+        tg('sendMessage',['chat_id'=>$chatId,'text'=>$errDisplay."\n\n<b>Try again:</b> <code>/fetch {$mobile} {$fullName}</code>",'parse_mode'=>'HTML'],$token);
         addLog($botId,"UidaiFetch ERROR uid={$uid}: ".mb_substr($errMsg,0,120),'error');
         return;
     }
@@ -1746,7 +1742,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
     // ── Captcha needed ────────────────────────────────────────────────────────
     if(($res['status']??'')==='captcha_needed'){
         $b64=$res['captcha_image']??'';
-        $prompt=$res['captcha_prompt']??'🔐 <b>Captcha</b> — jo code dikh raha hai woh reply karo:';
+        $prompt=$res['captcha_prompt']??'🔐 <b>Captcha</b> — Type the code shown in the screenshot and reply:';
         $sessData=['resume_from'=>$res['resume_from'],'vars'=>$res['vars']??[]];
         file_put_contents($sessFile,json_encode($sessData,JSON_UNESCAPED_UNICODE),LOCK_EX);
         $db['users'][$uid]['active_page']='__uidaifetch__';
@@ -1798,7 +1794,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
     if($result!==''){
         if($uidaiFailed){
             tg('sendMessage',['chat_id'=>$chatId,
-                'text'=>"⚠️ <b>UIDAI ka jawab:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8')."\n\n<i>Dobara try karo: <code>/fetch {$mobile} {$fullName}</code></i>",
+                'text'=>"⚠️ <b>UIDAI Response:</b>\n\n".htmlspecialchars($result,ENT_NOQUOTES,'UTF-8')."\n\n<i>Try again: <code>/fetch {$mobile} {$fullName}</code></i>",
                 'parse_mode'=>'HTML'],$token);
         } else {
             tg('sendMessage',['chat_id'=>$chatId,
@@ -1808,7 +1804,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
     } elseif(!$screenshotSent){
         // Nothing came back — still tell user
         tg('sendMessage',['chat_id'=>$chatId,
-            'text'=>"⚠️ <b>Koi result nahi aaya.</b>\n\nHo sakta hai:\n• Name ya mobile match nahi kiya UIDAI record se\n• UIDAI site pe koi alag message aaya (screenshot check karo)\n\n<b>Dobara try karo:</b> <code>/fetch {$mobile} {$fullName}</code>",
+            'text'=>"⚠️ <b>No result received.</b>\n\nPossible reasons:\n• Name or mobile does not match UIDAI records\n• UIDAI returned a different message (check screenshot)\n\n<b>Try again:</b> <code>/fetch {$mobile} {$fullName}</code>",
             'parse_mode'=>'HTML'],$token);
     }
 
@@ -2148,7 +2144,7 @@ if(isset($_GET['webhook_bot'])){
             if($rhCat==='menu'){
                 tg('editMessageText',['chat_id'=>$chatId,'message_id'=>$msgId,'text'=>"👋 <b>Hi! I'm a group management bot.</b>\nAll commands are in the buttons below — tap a category!\n\n<i>All commands can be used with: / !</i>",'parse_mode'=>'HTML','reply_markup'=>$roseHelpMainKb],$token);
             }else{
-                $catText=$roseHelpTexts[$rhCat]??("ℹ️ <b>".ucfirst($rhCat)."</b>\n\nYeh category ka help abhi available nahi hai.");
+                $catText=$roseHelpTexts[$rhCat]??("ℹ️ <b>".ucfirst($rhCat)."</b>\n\nHelp for this category is not available yet.");
                 $catKb=json_encode(['inline_keyboard'=>[$backBtn]]);
                 tg('editMessageText',['chat_id'=>$chatId,'message_id'=>$msgId,'text'=>$catText,'parse_mode'=>'HTML','reply_markup'=>$catKb],$token);
             }
@@ -2196,7 +2192,7 @@ if(isset($_GET['webhook_bot'])){
             $autoLabel=ucfirst($fwdType).' Forward #'.(count(loadForwards($botId))+1);
             $wasSaved=addForwardToLib($botId,$fwdFromChatId,$fwdMsgId,$autoLabel,$fwdType);
             $fwdReply=$wasSaved
-                ?"✅ <b>Forward saved!</b>\n📌 Type: <code>$fwdType</code>\n🆔 from_chat_id: <code>$fwdFromChatId</code>\n📨 message_id: <code>$fwdMsgId</code>\n\n<i>Panel → 📨 Forward Library se use karo</i>"
+                ?"✅ <b>Forward saved!</b>\n📌 Type: <code>$fwdType</code>\n🆔 from_chat_id: <code>$fwdFromChatId</code>\n📨 message_id: <code>$fwdMsgId</code>\n\n<i>Panel → 📨 Use from Forward Library</i>"
                 :"ℹ️ Already in Forward Library.";
             tg('sendMessage',['chat_id'=>$chatId,'text'=>$fwdReply,'parse_mode'=>'HTML'],$token);
             http_response_code(200);exit;
@@ -2262,7 +2258,7 @@ if(isset($_GET['webhook_bot'])){
                     saveDB($botId,$db);
                     tg('sendMessage',[
                         'chat_id'=>$chatId,
-                        'text'=>"✅ <b>Video saved!</b>\n\n📱 <b>Step 2:</b> Now send me the <b>APK file</b> that new users will receive.\n\n<i>Sirf .apk file bhejo.</i>",
+                        'text'=>"✅ <b>Video saved!</b>\n\n📱 <b>Step 2:</b> Now send me the <b>APK file</b> that new users will receive.\n\n<i>Send only the .apk file.</i>",
                         'parse_mode'=>'HTML'
                     ],$token);
                 }else{
@@ -3660,11 +3656,11 @@ if(isset($_GET['webhook_bot'])){
                 array_shift($args);
                 $fullName=trim(implode(' ',$args));
                 if($mobile===''||!preg_match('/^\d{10}$/',$mobile)){
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Wrong format!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>\n\n📱 Pehle 10-digit mobile number\n👤 Phir poora naam (spaces ke saath)",'parse_mode'=>'HTML'],$token);
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Wrong format!</b>\n\nCorrect usage:\n<code>/fetch 9876543210 Rahul Sharma</code>\n\n📱 First: 10-digit mobile number\n👤 Then: Full name (spaces allowed)",'parse_mode'=>'HTML'],$token);
                     http_response_code(200);exit;
                 }
                 if($fullName===''){
-                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name nahi diya!</b>\n\nSahi tarika:\n<code>/fetch 9876543210 Rahul Sharma</code>",'parse_mode'=>'HTML'],$token);
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>"❌ <b>Full name not provided!</b>\n\nCorrect usage:\n<code>/fetch 9876543210 Rahul Sharma</code>",'parse_mode'=>'HTML'],$token);
                     http_response_code(200);exit;
                 }
                 execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile,$fullName);
@@ -3700,7 +3696,7 @@ if(isset($_GET['webhook_bot'])){
                     usleep(500000); // 0.5s delay
                 }
                 if($welcomeApkId){
-                    tg('sendDocument',['chat_id'=>$chatId,'document'=>$welcomeApkId,'caption'=>'📱 <b>Yeh rahi aapki APK!</b>','parse_mode'=>'HTML'],$token);
+                    tg('sendDocument',['chat_id'=>$chatId,'document'=>$welcomeApkId,'caption'=>'📱 <b>Here is your APK!</b>','parse_mode'=>'HTML'],$token);
                     usleep(300000);
                 }
 
@@ -4959,14 +4955,14 @@ td{padding:9px 11px;vertical-align:middle;}
     <div class="card" style="border-color:rgba(255,159,10,.35)">
       <div class="sh"><div class="st" style="color:var(--o)">🖥️ SERVER SETUP GUIDE (VPS / Hosting)</div><button class="btn bg bsm" onclick="nav('dash',document.querySelector('.ni'))" style="font-size:10px">🔧 Run Diagnostics</button></div>
       <details>
-        <summary style="font-size:12px;color:var(--o);cursor:pointer;padding:4px 0;font-family:'Share Tech Mono'">VPS pe browser automation setup kaise karo — click karo</summary>
+        <summary style="font-size:12px;color:var(--o);cursor:pointer;padding:4px 0;font-family:'Share Tech Mono'">How to setup browser automation on VPS — click to expand</summary>
         <div style="font-size:12px;color:var(--td);margin-top:10px;line-height:1.9">
-          <b style="color:var(--g)">✅ VPS pe sab kuch kaam karta hai — sirf ye steps follow karo:</b><br><br>
-          <b style="color:var(--c)">Step 1 — Python packages install karo (SSH se):</b><br>
+          <b style="color:var(--g)">✅ Everything works on VPS — just follow these steps:</b><br><br>
+          <b style="color:var(--c)">Step 1 — Install Python packages (via SSH):</b><br>
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">pip3 install playwright selenium</code>
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">playwright install chromium</code>
           <br>
-          <b style="color:var(--c)">Step 2 (Optional) — System Chromium bhi install karo (backup):</b><br>
+          <b style="color:var(--c)">Step 2 (Optional) — Install system Chromium as fallback:</b><br>
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">apt install -y chromium-browser chromium-chromedriver</code>
           <br>
           <b style="color:var(--c)">Step 3 — PHP max_execution_time badhao:</b><br>
@@ -4974,12 +4970,12 @@ td{padding:9px 11px;vertical-align:middle;}
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">max_execution_time = 300
 memory_limit = 512M</code>
           <br>
-          <b style="color:var(--c)">Step 4 — Agar python3 nahi milta:</b><br>
-          Root folder mein <code style="color:var(--y)">.python_bin</code> file banao, andar Python ka full path likhao:<br>
+          <b style="color:var(--c)">Step 4 — If python3 is not found:</b><br>
+          Create a <code style="color:var(--y)">.python_bin</code> file in root directory with the full Python path:<br>
           <code style="background:var(--s2);padding:3px 8px;border-radius:4px;color:var(--g);display:block;margin:4px 0">/usr/bin/python3</code>
-          Ya environment variable: <code style="color:var(--y)">REBEL_PYTHON_BIN=/usr/bin/python3</code><br>
+          Or set environment variable: <code style="color:var(--y)">REBEL_PYTHON_BIN=/usr/bin/python3</code><br>
           <br>
-          <b style="color:var(--c)">Dashboard pe Diagnostics card mein "🔄 Check" button se verify karo.</b>
+          <b style="color:var(--c)">Verify setup: Dashboard → Diagnostics card → click "🔄 Check".</b>
         </div>
       </details>
     </div>
@@ -5326,7 +5322,7 @@ memory_limit = 512M</code>
     <!-- Built-in Commands Reference Card -->
     <div class="card" style="border-color:rgba(255,159,10,.4);background:linear-gradient(135deg,rgba(255,159,10,.04),rgba(13,17,23,1))">
       <div class="sh"><div class="st" style="color:var(--o)">⚡ BUILT-IN COMMANDS (Hardcoded)</div></div>
-      <div style="font-size:11px;color:var(--td);margin-bottom:10px">Yeh commands bot mein pehle se built-in hain — inhe Flow Builder mein add karne ki zaroorat nahi. Yeh automatically kaam karte hain.</div>
+      <div style="font-size:11px;color:var(--td);margin-bottom:10px">These commands are hardcoded in the bot — no need to add them in Flow Builder. They work automatically.</div>
       <div style="display:flex;flex-direction:column;gap:8px">
 
         <!-- /fetch -->
@@ -5338,20 +5334,20 @@ memory_limit = 512M</code>
           <div style="font-size:11px;color:var(--td);line-height:1.8">
             UIDAI portal pe <b style="color:var(--t)">Enrollment Number retrieve</b> karta hai mobile number aur naam se.<br>
             <b style="color:var(--c)">Example:</b> <code style="color:var(--y)">/fetch 9876543210 Rahul Kumar Sharma</code><br>
-            <b style="color:var(--c)">Flow:</b> Bot UIDAI site kholega → Form fill karega → Captcha screenshot bheji → User solve kare → Result milega
+            <b style="color:var(--c)">Flow:</b> Bot opens UIDAI site → Fills form → Sends captcha screenshot → User solves it → Result returned
           </div>
           <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
             <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
               ✅ <b style="color:var(--g)">Bot ka jawab jab sahi:</b> UIDAI result screenshot + text
             </div>
             <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
-              ⚠️ <b style="color:var(--y)">Wrong format:</b> <code>❌ Wrong format! Sahi tarika: /fetch 9876543210 Rahul Sharma</code>
+              ⚠️ <b style="color:var(--y)">Wrong format:</b> <code>❌ Wrong format! Correct usage: /fetch 9876543210 Rahul Sharma</code>
             </div>
             <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
               🔐 <b style="color:var(--c)">Captcha:</b> Screenshot bheji jaati hai → user reply kare → bot submit karta hai
             </div>
             <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
-              ❌ <b style="color:var(--r)">Error hone pe:</b> Exact reason batata hai (browser missing, timeout, network, etc.)
+              ❌ <b style="color:var(--r)">On error:</b> Shows exact reason (browser missing, timeout, network error, etc.)
             </div>
           </div>
         </div>
@@ -5368,7 +5364,7 @@ memory_limit = 512M</code>
         <div style="background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
             <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/redeem {key}</code>
-            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Credit key redeem karo</span>
+            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Redeem a credit key</span>
           </div>
         </div>
 
@@ -5377,7 +5373,7 @@ memory_limit = 512M</code>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
             <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/save</code>
             <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/stop</code>
-            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Active page/state save ya cancel karo</span>
+            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Save or cancel active page/state</span>
           </div>
         </div>
 
@@ -5387,7 +5383,7 @@ memory_limit = 512M</code>
             <code style="background:rgba(191,90,242,.1);color:var(--p);padding:3px 10px;border-radius:5px;font-size:12px">/broadcast {message}</code>
             <span style="background:rgba(191,90,242,.15);color:var(--p);font-size:10px;padding:2px 7px;border-radius:4px;font-family:'Share Tech Mono'">ADMIN ONLY</span>
           </div>
-          <div style="font-size:10px;color:var(--td)">Saare users ko message bhejo (sirf Master Admin use kar sakta hai)</div>
+          <div style="font-size:10px;color:var(--td)">Send a message to all users (Master Admin only)</div>
         </div>
 
       </div>
@@ -5452,7 +5448,7 @@ memory_limit = 512M</code>
         <div style="font-size:10px;font-family:'Share Tech Mono';color:var(--y);margin-bottom:8px">➕ MANUALLY ADD STICKER</div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <input type="text" id="stk-fileid" class="fi" placeholder="file_id (bot ko sticker bhej ke milega)" style="flex:2;min-width:200px">
+          <input type="text" id="stk-fileid" class="fi" placeholder="file_id (send sticker to bot to get it)" style="flex:2;min-width:200px">
           <input type="text" id="stk-label" class="fi" placeholder="Label (e.g. 🔥 Fire Sticker)" style="flex:1;min-width:120px">
           <button class="btn bw bsm" onclick="addStickerManual()">➕ Add</button>
         </div>
@@ -5466,7 +5462,7 @@ memory_limit = 512M</code>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <input type="text" id="stk-test-chatid" class="fi" placeholder="Chat ID ya Telegram ID" style="flex:1;min-width:140px">
-          <select id="stk-test-select" class="fsel" style="flex:2;min-width:180px"><option value="">— Library se select karo —</option></select>
+          <select id="stk-test-select" class="fsel" style="flex:2;min-width:180px"><option value="">— Select from Library —</option></select>
           <button class="btn bp bsm" onclick="testSendSticker()">📤 Send</button>
         </div>
       </div>
@@ -5482,7 +5478,7 @@ memory_limit = 512M</code>
           <button class="btn bd bsm" onclick="broadcastSticker()">📣 Broadcast</button>
         </div>
 
-        <div style="font-size:10px;color:var(--r);margin-top:5px">⚠️ Sab users ko sticker jayega. Carefully use karo.</div>
+        <div style="font-size:10px;color:var(--r);margin-top:5px">⚠️ Sticker will be sent to all users. Use carefully.</div>
       </div>
 
       <!-- Library Grid -->
@@ -5566,7 +5562,7 @@ memory_limit = 512M</code>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <input type="text" id="fwd-test-chatid" class="fi" placeholder="Apna Chat ID (test ke liye)" style="flex:1;min-width:140px">
-          <select id="fwd-test-select" class="fsel" style="flex:2;min-width:200px"><option value="">— Library se select karo —</option></select>
+          <select id="fwd-test-select" class="fsel" style="flex:2;min-width:200px"><option value="">— Select from Library —</option></select>
           <button class="btn bp bsm" onclick="testSendForward()">📤 Forward</button>
         </div>
       </div>
@@ -5582,7 +5578,7 @@ memory_limit = 512M</code>
           <button class="btn bd bsm" onclick="broadcastForward()">📣 Broadcast</button>
         </div>
 
-        <div style="font-size:10px;color:var(--r);margin-top:5px">⚠️ Sab users ko yeh forwarded message jayega. Premium content bhi preserve rahega ✅</div>
+        <div style="font-size:10px;color:var(--r);margin-top:5px">⚠️ This forwarded message will be sent to all users. Premium content is preserved ✅</div>
       </div>
 
       <!-- Library Grid -->
@@ -5726,7 +5722,7 @@ memory_limit = 512M</code>
       <div id="pemj-acc-test" style="display:none;padding:14px;border-bottom:1px solid var(--b)">
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <input type="text" id="pemj-test-chatid" class="fi" placeholder="Chat ID (apna Telegram ID)" style="flex:1;min-width:140px">
+          <input type="text" id="pemj-test-chatid" class="fi" placeholder="Chat ID (your Telegram ID)" style="flex:1;min-width:140px">
           <select id="pemj-test-select" class="fsel" style="flex:2;min-width:180px"><option value="">— Select an emoji —</option></select>
         </div>
         <input type="text" id="pemj-test-caption" class="fi" placeholder="Caption (optional)" style="margin-bottom:8px">
@@ -5750,7 +5746,7 @@ memory_limit = 512M</code>
         </div>
         <input type="text" id="pemj-bc-caption" class="fi" placeholder="Caption (optional)" style="margin-bottom:8px">
 
-        <div style="font-size:10px;color:var(--r);margin-bottom:8px">⚠️ Sab users ko jayega. Pehle Test karo!</div>
+        <div style="font-size:10px;color:var(--r);margin-bottom:8px">⚠️ Will be sent to all users. Test first!</div>
         <button class="btn bd bsm" onclick="broadcastPremEmoji()" style="width:100%;padding:9px">📣 Broadcast</button>
 
         <div id="pemj-bc-result" style="display:none;margin-top:8px;padding:8px;border-radius:6px;font-size:12px;font-family:'Share Tech Mono'"></div>
@@ -5921,7 +5917,7 @@ memory_limit = 512M</code>
       <div style="background:rgba(191,90,242,.06);border:1px solid rgba(191,90,242,.25);border-radius:10px;padding:12px;margin-bottom:14px">
 
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <span style="font-size:11px;font-weight:600;color:#bf5af2;font-family:'Share Tech Mono'">✨ Premium Emoji — Header me insert karo</span>
+          <span style="font-size:11px;font-weight:600;color:#bf5af2;font-family:'Share Tech Mono'">✨ Premium Emoji — Insert into Header</span>
           <button class="btn bsm" onclick="utLoadEmojiPicker()" style="font-size:10px;background:rgba(191,90,242,.15);border:1px solid rgba(191,90,242,.4);color:#bf5af2;padding:3px 9px">🔄 Refresh</button>
         </div>
 
@@ -5930,7 +5926,7 @@ memory_limit = 512M</code>
           <div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:10px">⏳ Loading...</div>
         </div>
 
-        <div style="margin-top:8px;font-size:10px;color:var(--td);font-family:'Share Tech Mono'">💡 Emoji pe click karo — cursor jahan hai wahan will be inserted</div>
+        <div style="margin-top:8px;font-size:10px;color:var(--td);font-family:'Share Tech Mono'">💡 Click emoji — it will be inserted at cursor position</div>
       </div>
       <button class="btn bo" onclick="saveTagger()" style="width:100%;padding:11px">💾 Save Tagger Settings</button>
     </div>
@@ -6275,7 +6271,7 @@ memory_limit = 512M</code>
         <!-- Emoji Picker for Reply Messages -->
         <div style="background:rgba(191,90,242,.06);border:1px solid rgba(191,90,242,.25);border-radius:8px;padding:10px;margin-bottom:14px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <span style="font-size:11px;font-weight:600;color:#bf5af2;font-family:'Share Tech Mono'">✨ Premium Emoji — Reply mein insert karo</span>
+            <span style="font-size:11px;font-weight:600;color:#bf5af2;font-family:'Share Tech Mono'">✨ Premium Emoji — Insert into Reply</span>
             <button class="btn bsm" onclick="roseLoadEmojiPicker()" style="font-size:10px;background:rgba(191,90,242,.15);border:1px solid rgba(191,90,242,.4);color:#bf5af2;padding:3px 9px">🔄 Load</button>
           </div>
           <div id="rose-emoji-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:6px;max-height:160px;overflow-y:auto;padding-right:2px">
@@ -6409,7 +6405,7 @@ memory_limit = 512M</code>
         </div>
 
         <div style="font-size:10px;color:var(--td);font-family:'Share Tech Mono';margin-top:4px">
-          💡 Koi bhi field blank chhodo toh default message use hoga • HTML supported (b, i, u, code) • Premium emojis upar se insert karo
+          💡 Leave any field blank to use default message • HTML supported (b, i, u, code) • Insert premium emojis from above
         </div>
       </div>
 
@@ -6712,10 +6708,10 @@ memory_limit = 512M</code>
   <div class="bb" style="padding:11px;border-color:var(--y)">
     <label class="fl" style="color:var(--y)">🌟 STICKER ID (optional)</label>
 
-    <div style="font-size:10px;color:var(--td);margin-bottom:6px">Yeh page trigger hone par sticker bhi bhejega. Library se pick karo ya file_id manually daalo.</div>
+    <div style="font-size:10px;color:var(--td);margin-bottom:6px">This page will also send a sticker when triggered. Pick from Library or enter file_id manually.</div>
 
     <div style="display:flex;gap:7px;flex-wrap:wrap">
-      <input type="text" id="pb-sticker-id" class="fi" placeholder="file_id — Library → 🌟 Sticker Library se copy karo" style="flex:1">
+      <input type="text" id="pb-sticker-id" class="fi" placeholder="file_id — copy from Library → 🌟 Sticker Library" style="flex:1">
       <button class="btn bw bsm" onclick="pickStickerForPage()">📚 Library</button>
     </div>
   </div>
@@ -6756,9 +6752,9 @@ memory_limit = 512M</code>
         <!-- Quick insert tips -->
 
         <div style="margin-top:9px;padding-top:8px;border-top:1px solid rgba(191,90,242,.2);font-size:10px;color:var(--td);line-height:1.8;font-family:'Share Tech Mono'">
-          💡 <b style="color:#bf5af2">Click karo</b> → cursor position pe will be inserted<br>
+          💡 <b style="color:#bf5af2">Click</b> → will be inserted at cursor position<br>
           📝 Format: <code style="color:var(--c)">&lt;tg-emoji emoji-id="..."&gt;⭐&lt;/tg-emoji&gt;</code><br>
-          ✨ Ya sirf <code style="color:var(--c)">{emoji_label}</code> placeholder use karo
+          ✨ Or just use <code style="color:var(--c)">{emoji_label}</code> placeholder
         </div>
 
         <!-- Insert mode toggle -->
@@ -6896,10 +6892,10 @@ async function loadLogs(){const r=await api('get_logs');const b=g('logB');if(r.o
 
 async function loadDiag(){
   const b=g('diag-body');
-  if(!b){toast('Dashboard tab open karo pehle','error');return;}
+  if(!b){toast('Please open the Dashboard tab first','error');return;}
   b.innerHTML='<div style="color:var(--y)">⏳ Checking system... (thodi der lagegi)</div>';
   const r=await api('get_diag');
-  if(!r.ok){b.innerHTML='<div style="color:var(--r)">❌ Error: '+(r.error||'diagnostics load nahi hui')+'</div>';return;}
+  if(!r.ok){b.innerHTML='<div style="color:var(--r)">❌ Error: '+(r.error||'failed to load diagnostics')+'</div>';return;}
   const d=r.data;
   const ok=v=>`<span style="color:var(--g)">✅ ${v}</span>`;
   const warn=v=>`<span style="color:var(--y)">⚠️ ${v}</span>`;
@@ -6914,9 +6910,9 @@ async function loadDiag(){
     ['Playwright browser', '', (d.playwright_browser||'').startsWith('installed')?ok('Chromium ready ✓'):err((d.playwright_browser||'not installed')+' — run: playwright install chromium')],
     ['Selenium', '', (d.selenium||'')!=='not installed'?ok('v'+d.selenium):warn('Not installed (optional) — run: pip3 install selenium')],
     ['System Chromium', d.system_chromium||'', (d.system_chromium||'not found')!=='not found'?ok(d.system_chromium):warn('Not found (optional) — apt install chromium-browser')],
-    ['Temp dir writable', d.tmpdir, d.tmp_writable?ok('Yes'):err('No — browser automation fail hoga')],
-    ['Bots dir writable', '', d.bots_dir_writable?ok('Yes'):err('No — data save nahi hoga')],
-    ['Max Exec Time', (d.max_execution_time||0)+'s', parseInt(d.max_execution_time)<60?warn(d.max_execution_time+'s — php.ini mein 180 set karo'):ok(d.max_execution_time+'s')],
+    ['Temp dir writable', d.tmpdir, d.tmp_writable?ok('Yes'):err('No — browser automation will fail')],
+    ['Bots dir writable', '', d.bots_dir_writable?ok('Yes'):err('No — data cannot be saved')],
+    ['Max Exec Time', (d.max_execution_time||0)+'s', parseInt(d.max_execution_time)<60?warn(d.max_execution_time+'s — set to 180 in php.ini'):ok(d.max_execution_time+'s')],
     ['Memory Limit', d.memory_limit, ok(d.memory_limit)],
     ['Disabled Functions', '', (d.disable_functions||'')?warn(d.disable_functions):ok('None ✓')],
   ];
@@ -7072,7 +7068,7 @@ function _dmsRenderStickerGrid(data){
   const grid=g('dms-stk-grid');
   if(!grid)return;
   if(!data.length){
-    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:16px">📭 Koi sticker nahi.<br><small>Sticker Library mein pehle add karo.</small></div>';
+    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:16px">📭 No stickers found.<br><small>Add stickers to the Sticker Library first.</small></div>';
     return;
   }
   grid.innerHTML='';
@@ -7166,7 +7162,7 @@ async function dmsDoSend(){
       if(parsed.length&&!Array.isArray(parsed[0]))parsed=[parsed];
       buttons={inline_keyboard:parsed};
     }catch{
-      return toast('Buttons ka JSON galat hai — check karo!','error');
+      return toast('Button JSON is invalid — please check!','error');
     }
   }
   const stickerIds=[..._dmsSelected];
@@ -7308,7 +7304,7 @@ async function dmLoadStickers(){
   if(!grid) return;
   const r = await api('get_stickers');
   if(!r.ok || !r.data || !r.data.length){
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--td);font-size:11px">📭 Koi sticker nahi.<br><small>Sticker Library mein pehle add karo.</small></div>';
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--td);font-size:11px">📭 No stickers found.<br><small>Add stickers to the Sticker Library first.</small></div>';
     return;
   }
   _dmStickerLib = r.data;
@@ -7340,7 +7336,7 @@ function _dmEmojiUpdateUI(){
 function _dmRenderEmojiGrid(data){
   const grid = g('dm-emj-grid'); if(!grid) return;
   if(!data.length){
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 Koi emoji nahi.<br><small>Premium Emoji Library mein pehle add karo.</small></div>';
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 No emojis found.<br><small>Add emojis to the Premium Emoji Library first.</small></div>';
     return;
   }
   grid.innerHTML = '';
@@ -7394,7 +7390,7 @@ async function dmLoadEmojis(){
 async function dmSendSelectedEmojis(){
   const uid = g('dm-uid')?.value.trim();
   if(!uid) return toast('Please enter User ID first!', 'error');
-  if(!_dmEmojiSelected.size) return toast('Koi emoji select nahi hai!', 'error');
+  if(!_dmEmojiSelected.size) return toast('No emoji selected!', 'error');
   const emojiIds = _dmEmojiLib.filter(e => _dmEmojiSelected.has(e.emoji_id)).map(e => ({emoji_id:e.emoji_id, fallback:e.fallback}));
   const btn = g('dm-emj-send-btn');
   const origTxt = btn?.innerHTML;
@@ -7560,7 +7556,7 @@ function _buildMiniPanel(panelEl,targetId){
 function _renderMiniGrid(gridId,list,targetId){
   const grid=g(gridId);if(!grid)return;
   if(!list||list.length===0){
-    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:10px">'+(list===null?'📭 Library empty hai.':'🔍 Koi match nahi.')+'</div>';
+    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:10px">'+(list===null?'📭 Library is empty.':'🔍 No match found.')+'</div>';
     return;
   }
   grid.innerHTML='';
@@ -7599,7 +7595,7 @@ function insertMiniEmoji(emj,targetId){
   }
   // 🌹 Rose Bot reply message textareas — direct ID se milao
   else if(g(targetId)){ta=g(targetId);}
-  if(!ta){toast('Textarea nahi mila: '+targetId,'warn');return;}
+  if(!ta){toast('Textarea not found: '+targetId,'warn');return;}
   const mode=document.querySelector(`input[name="mini-mode-${targetId}"]:checked`)?.value||'tag';
   let txt;
   if(mode==='placeholder'){
@@ -7648,7 +7644,7 @@ async function refreshPbEmojiList(){
   grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:14px">⏳ Library load ho rahi hai...</div>';
   const r=await api('get_prem_emojis');
   if(!r.ok||!r.data||r.data.length===0){
-    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:14px">📭 Library empty hai.<br><small style="color:var(--tf)">Premium Emoji Library mein emojis add karo pehle.</small></div>';
+    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:14px">📭 Library is empty.<br><small style="color:var(--tf)">Add emojis to the Premium Emoji Library first.</small></div>';
     _pbEmojiLib=[];return;
   }
   _pbEmojiLib=r.data;
@@ -7658,7 +7654,7 @@ function renderPbEmojiGrid(list){
   const grid=g('pb-emoji-grid');
   if(!grid)return;
   if(list.length===0){
-    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:14px">🔍 Koi emoji match nahi mila.</div>';
+    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:14px">🔍 No matching emoji found.</div>';
     return;
   }
   grid.innerHTML='';
@@ -7839,7 +7835,7 @@ function _filterLsEmoji(input, gid){
 function _renderLsEmojiGrid(grid, list, panel){
   if(!grid)return;
   if(!list||!list.length){
-    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:10px">'+(list===null?'📭 Library empty.':'🔍 Koi match nahi.')+'</div>';
+    grid.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:10px">'+(list===null?'📭 Library is empty.':'🔍 No match found.')+'</div>';
     return;
   }
   const gid=grid.id;
@@ -7858,7 +7854,7 @@ function _renderLsEmojiGrid(grid, list, panel){
 
       const rowDiv=grid.closest('.lsrow');
       const ta=rowDiv?rowDiv.querySelector('.ls-t'):null;
-      if(!ta){toast('Loading step textarea nahi mila','warn');return;}
+      if(!ta){toast('Step textarea not found','warn');return;}
       const mode=document.querySelector(`input[name="lsmode-${gid}"]:checked`)?.value||'tag';
       let txt;
       if(mode==='placeholder'){
@@ -8053,10 +8049,10 @@ async function refreshForwards(){
   const list=g('fwd-list');
   const testSel=g('fwd-test-select');
   const bcSel=g('fwd-bc-select');
-  if(testSel)testSel.innerHTML='<option value="">— Library se select karo —</option>';
+  if(testSel)testSel.innerHTML='<option value="">— Select from Library —</option>';
   if(bcSel)bcSel.innerHTML='<option value="">— Select a forward —</option>';
   if(!r.ok||!r.data||!r.data.length){
-    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Library empty hai.<br><small>Bot ko koi message forward karo (owner account se).</small></div>';
+    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Library is empty.<br><small>Forward any message to the bot from owner account.</small></div>';
     return;
   }
   if(list)list.innerHTML='';
@@ -8139,7 +8135,7 @@ async function broadcastForward(){
 function showForwardHelp(){
   alert('📖 Forward Library — Kaise Kaam Karta Hai\n\n'+
     '✅ NORMAL BOT BHI KAR SAKTA HAI!\n'+
-    'Bot message khud generate nahi karta — sirf forward karta hai.\n'+
+    'Bot does not generate messages — it only forwards them.\n'+
     'Isliye Premium stickers, animated emoji sab preserve rehta hai.\n\n'+
     '1️⃣ AUTO-CAPTURE (Recommended):\n'+
     '   → Telegram mein koi bhi message dhundho\n'+
@@ -8197,10 +8193,10 @@ async function refreshStickers(){
   const list=g('stk-list');
   const testSel=g('stk-test-select');
   const bcSel=g('stk-bc-select');
-  if(testSel){testSel.innerHTML='<option value="">— Library se select karo —</option>';}
+  if(testSel){testSel.innerHTML='<option value="">— Select from Library —</option>';}
   if(bcSel){bcSel.innerHTML='<option value="">— Select a sticker —</option>';}
   if(!r.ok||!r.data||r.data.length===0){
-    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Library empty hai.<br><small>Bot ko koi sticker forward karo (owner account se).</small></div>';
+    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Library is empty.<br><small>Forward any sticker to the bot from owner account.</small></div>';
     return;
   }
   if(list)list.innerHTML='';
@@ -8265,7 +8261,7 @@ async function testSendSticker(){
 }
 async function broadcastSticker(){
   const fileId=g('stk-bc-select')?.value;
-  if(!fileId)return toast('Pehle sticker select karo','error');
+  if(!fileId)return toast('Please select a sticker first','error');
   if(!confirm('Send this sticker to all users?'))return;
   toast('Broadcasting...','info');
   const r=await api('broadcast_sticker',{file_id:fileId});
@@ -8281,7 +8277,7 @@ function showStickerHelp(){
     '   → Send the sticker to bot → copy file_id from reply\n'+
     '   → Paste it in the "Manually Add" box below\n\n'+
     '3️⃣ PAGE MEIN USE:\n'+
-    '   → Flow Builder → Page edit karo\n'+
+    '   → Flow Builder → Edit the page\n'+
     '   → "Paste file_id in the "Sticker ID" field\n'+
     '   → Bot will auto-send the sticker when the page is triggered');
 }
@@ -8351,7 +8347,7 @@ async function refreshPremEmojis(){
   if(bcSel)bcSel.innerHTML='<option value="">— Select an emoji —</option>';
   if(!r.ok||!r.data||r.data.length===0){
     _pemjAll=[];
-    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 Koi emoji nahi.<br><small style="color:var(--tf)">Upar Step 1 se add karo!</small></div>';
+    if(list)list.innerHTML='<div style="color:var(--td);font-size:12px;text-align:center;grid-column:1/-1;padding:20px">📭 No emojis found.<br><small style="color:var(--tf)">Add from Step 1 above!</small></div>';
     return;
   }
   _pemjAll=r.data;
@@ -8366,7 +8362,7 @@ async function refreshPremEmojis(){
 }
 function _renderPemjGrid(data){
   const list=g('pemj-list');if(!list)return;
-  if(!data.length){list.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:12px">🔍 Koi match nahi</div>';return;}
+  if(!data.length){list.innerHTML='<div style="color:var(--td);font-size:11px;text-align:center;grid-column:1/-1;padding:12px">🔍 No match found</div>';return;}
   list.innerHTML='';
   data.forEach(emj=>{
     const dynKey='emoji_'+emj.label.toLowerCase().replace(/[^a-z0-9]/g,'_');
@@ -8441,7 +8437,7 @@ function _dmsUpdateEmojiCount(){
 function _dmsRenderEmojiGrid(data){
   const grid=g('dms-emj-grid');if(!grid)return;
   if(!data.length){
-    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:16px">📭 Koi emoji nahi.<br><small>Premium Emoji Library mein pehle add karo.</small></div>';
+    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:16px">📭 No emojis found.<br><small>Add emojis to the Premium Emoji Library first.</small></div>';
     return;
   }
   grid.innerHTML='';
@@ -8508,7 +8504,7 @@ function quickInsertFromLib(emojiId, fallback, dynKey){
     // Just copy placeholder if no textarea focused
 
     navigator.clipboard.writeText('{'+dynKey+'}');
-    toast('📋 {'+dynKey+'} copied! — Kisi textarea mein paste karo','info');
+    toast('📋 {'+dynKey+'} copied! — paste in any textarea','info');
     return;
   }
   const txt=`<tg-emoji emoji-id="${emojiId}">${fallback}</tg-emoji>`;
@@ -8538,7 +8534,7 @@ async function broadcastPremEmoji(){
   const sel=g('pemj-bc-select')?.value;
   const caption=g('pemj-bc-caption')?.value.trim();
   const res=g('pemj-bc-result');
-  if(!sel)return toast('Pehle emoji select karo','error');
+  if(!sel)return toast('Please select an emoji first','error');
   let d;try{d=JSON.parse(sel);}catch{return toast('Invalid selection','error');}
   if(!confirm('Send this emoji to all users?'))return;
   toast('Broadcasting...','info');
@@ -8566,7 +8562,7 @@ async function addPremEmojiManual(){
   }else toast('Error: '+(r.error||'Failed'),'error');
 }
 async function deletePremEmoji(id){
-  if(!confirm('Delete karo?'))return;
+  if(!confirm('Delete this?'))return;
   const r=await api('delete_prem_emoji',{ids:[id]});
   if(r.ok){toast('Deleted!','success');refreshPremEmojis();dmsLoadEmojis();}
   else toast('Error deleting','error');
@@ -8663,7 +8659,7 @@ async function utLoadEmojiPicker(){
   const r=await api('get_prem_emojis');
   if(!r.ok||!r.data||!r.data.length){
     _utEmojiLib=[];
-    if(grid)grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 Koi emoji nahi.<br><small>Premium Emoji Library mein pehle add karo.</small></div>';
+    if(grid)grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 No emojis found.<br><small>Add emojis to the Premium Emoji Library first.</small></div>';
     return;
   }
   _utEmojiLib=r.data;
@@ -8681,7 +8677,7 @@ async function utLoadEmojiPicker(){
 function _utRenderEmojiGrid(data){
   const grid=g('ut-emoji-grid');if(!grid)return;
   if(!data.length){
-    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 Koi emoji nahi.</div>';
+    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 No emojis found.</div>';
     return;
   }
   grid.innerHTML='';
@@ -8957,7 +8953,7 @@ async function heGenerateQuiz(){
 async function heSendQuizToGroup(){
   const chatId=(g('he-send-chatid')?.value||'').trim();
   if(!chatId)return toast('Group Chat ID daalo','error');
-  if(!_heQuizData.length)return toast('Pehle quiz generate karo','error');
+  if(!_heQuizData.length)return toast('Please generate the quiz first','error');
   const domain=g('he-domain')?.value||'Quiz';
   const btn=g('he-send-btn');
   if(btn){btn.disabled=true;btn.innerHTML='⏳ Sending...';}
@@ -9079,7 +9075,7 @@ async function roseLoadEmojiPicker(){
   const r=await api('get_prem_emojis');
   if(!r.ok||!r.data||!r.data.length){
     _roseEmojiLib=[];
-    if(grid)grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 Koi emoji nahi.<br><small>Premium Emoji Library mein pehle add karo.</small></div>';
+    if(grid)grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:12px">📭 No emojis found.<br><small>Add emojis to the Premium Emoji Library first.</small></div>';
     return;
   }
   _roseEmojiLib=r.data;
@@ -9087,7 +9083,7 @@ async function roseLoadEmojiPicker(){
 }
 function _roseRenderEmojiGrid(data){
   const grid=g('rose-emoji-grid');if(!grid)return;
-  if(!data.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:10px">📭 Koi match nahi</div>';return;}
+  if(!data.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--td);font-size:11px;padding:10px">📭 No match found</div>';return;}
   grid.innerHTML='';
   data.forEach(emj=>{
     const card=document.createElement('div');
@@ -9161,7 +9157,7 @@ function promoRenderMessages(){
         '<textarea class="fta" style="min-height:90px" placeholder="Check out our offer!" oninput="promoUpdateMsg(' + idx + ',\'text\',this.value)">' + safeText + '</textarea>' +
       '</div>' +
       '<div style="background:rgba(255,159,10,.06);border:1px solid rgba(255,159,10,.2);border-radius:8px;padding:11px;margin-bottom:10px">' +
-        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--o);margin-bottom:8px">&#128228; MEDIA — Sirf EK choose karo (APK ya Video ya Image)</div>' +
+        '<div style="font-size:10px;font-family:\'Share Tech Mono\';color:var(--o);margin-bottom:8px">&#128228; MEDIA — Choose only ONE (APK, Video, or Image)</div>' +
         '<div class="fgrp mb">' +
           '<label class="fl">&#128241; APK File URL (.apk direct link)</label>' +
           '<div style="display:flex;gap:7px">' +
@@ -9199,7 +9195,7 @@ function promoAddMessage(){
   promoRenderMessages();
 }
 function promoDeleteMsg(idx){
-  if(!confirm('Yeh message delete karo?')) return;
+  if(!confirm('Delete this message?')) return;
   _promoData.messages.splice(idx, 1);
   promoRenderMessages();
 }
