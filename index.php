@@ -3627,19 +3627,78 @@ if(isset($_GET['webhook_bot'])){
             }
 
             if($cmdStr==='broadcast'){
-                if($uid===($s['adminId']??'')){
-                    $bcMsg=trim(implode(' ',$args));
-                    if($bcMsg){
-                        $allUids=array_keys($db['users']??[]);$sent=0;$fail=0;
-                        foreach($allUids as $tuid){
-                            $r=tg('sendMessage',['chat_id'=>$tuid,'text'=>$bcMsg,'parse_mode'=>'HTML'],$token);
-                            if($r['ok']??false)$sent++;else $fail++;
-                            usleep(50000);
-                        }
-                        tg('sendMessage',['chat_id'=>$chatId,'text'=>"📣 Broadcast done!\n✅ Sent: $sent\n❌ Failed: $fail",'parse_mode'=>'HTML'],$token);
-                        addLog($botId,"Bot Broadcast: $sent sent, $fail failed",'info');
-                    }
+                if($uid!==($s['adminId']??'')){
+                    tg('sendMessage',['chat_id'=>$chatId,'text'=>'🚫 <b>Access Denied.</b> Owner only.','parse_mode'=>'HTML'],$token);
+                    http_response_code(200);exit;
                 }
+                // Collect all unique chat IDs (users + groups)
+                $allChats=[];
+                foreach(array_keys($db['users']??[]) as $tuid){
+                    if(!empty($db['users'][$tuid]['banned']))continue;
+                    $allChats[$tuid]=true;
+                }
+                // Add groups from group_members
+                foreach(array_keys($db['group_members']??[]) as $gid){
+                    $allChats[$gid]=true;
+                }
+                $allChats=array_keys($allChats);
+                $sent=0;$fail=0;
+                $bcCaption=trim(implode(' ',$args));
+
+                // Check if message has media (reply to media or caption)
+                $replyMsg=$update['message']['reply_to_message']??null;
+                $hasPhoto=!empty($msg['photo'])||!empty($replyMsg['photo']);
+                $hasVideo=!empty($msg['video'])||!empty($replyMsg['video']);
+                $hasDoc=!empty($msg['document'])||!empty($replyMsg['document']);
+                $hasAudio=!empty($msg['audio'])||!empty($replyMsg['audio']);
+                $hasVoice=!empty($msg['voice'])||!empty($replyMsg['voice']);
+                $hasSticker=!empty($msg['sticker'])||!empty($replyMsg['sticker']);
+
+                // Get file_id from message or replied message
+                $srcMsg=$hasPhoto||$hasVideo||$hasDoc||$hasAudio||$hasVoice||$hasSticker?($msg??[]):($replyMsg??[]);
+                if(empty($srcMsg)&&$replyMsg)$srcMsg=$replyMsg;
+
+                // Get caption from command args or original caption
+                if($bcCaption==='')$bcCaption=$srcMsg['caption']??'';
+
+                foreach($allChats as $tuid){
+                    $r=['ok'=>false];
+                    try{
+                        if(!empty($srcMsg['photo'])){
+                            $fid=end($srcMsg['photo'])['file_id'];
+                            $p=['chat_id'=>$tuid,'photo'=>$fid,'parse_mode'=>'HTML'];
+                            if($bcCaption!=='')$p['caption']=$bcCaption;
+                            $r=tg('sendPhoto',$p,$token);
+                        } elseif(!empty($srcMsg['video'])){
+                            $fid=$srcMsg['video']['file_id'];
+                            $p=['chat_id'=>$tuid,'video'=>$fid,'parse_mode'=>'HTML'];
+                            if($bcCaption!=='')$p['caption']=$bcCaption;
+                            $r=tg('sendVideo',$p,$token);
+                        } elseif(!empty($srcMsg['document'])){
+                            $fid=$srcMsg['document']['file_id'];
+                            $p=['chat_id'=>$tuid,'document'=>$fid,'parse_mode'=>'HTML'];
+                            if($bcCaption!=='')$p['caption']=$bcCaption;
+                            $r=tg('sendDocument',$p,$token);
+                        } elseif(!empty($srcMsg['audio'])){
+                            $fid=$srcMsg['audio']['file_id'];
+                            $p=['chat_id'=>$tuid,'audio'=>$fid,'parse_mode'=>'HTML'];
+                            if($bcCaption!=='')$p['caption']=$bcCaption;
+                            $r=tg('sendAudio',$p,$token);
+                        } elseif(!empty($srcMsg['voice'])){
+                            $fid=$srcMsg['voice']['file_id'];
+                            $r=tg('sendVoice',['chat_id'=>$tuid,'voice'=>$fid],$token);
+                        } elseif(!empty($srcMsg['sticker'])){
+                            $fid=$srcMsg['sticker']['file_id'];
+                            $r=tg('sendSticker',['chat_id'=>$tuid,'sticker'=>$fid],$token);
+                        } elseif($bcCaption!==''){
+                            $r=tg('sendMessage',['chat_id'=>$tuid,'text'=>$bcCaption,'parse_mode'=>'HTML'],$token);
+                        }
+                    } catch(Exception $e){}
+                    if($r['ok']??false)$sent++;else $fail++;
+                    usleep(50000);
+                }
+                tg('sendMessage',['chat_id'=>$chatId,'text'=>"📣 <b>Broadcast Complete!</b>\n\n✅ Sent: <b>{$sent}</b>\n❌ Failed: <b>{$fail}</b>\n👥 Total: <b>".count($allChats)."</b>",'parse_mode'=>'HTML'],$token);
+                addLog($botId,"Broadcast: {$sent} sent, {$fail} failed",'success');
                 http_response_code(200);exit;
             }
 
