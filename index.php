@@ -5323,9 +5323,79 @@ memory_limit = 512M</code>
 
   <div class="panel" id="p-builder">
 
+    <!-- Built-in Commands Reference Card -->
+    <div class="card" style="border-color:rgba(255,159,10,.4);background:linear-gradient(135deg,rgba(255,159,10,.04),rgba(13,17,23,1))">
+      <div class="sh"><div class="st" style="color:var(--o)">⚡ BUILT-IN COMMANDS (Hardcoded)</div></div>
+      <div style="font-size:11px;color:var(--td);margin-bottom:10px">Yeh commands bot mein pehle se built-in hain — inhe Flow Builder mein add karne ki zaroorat nahi. Yeh automatically kaam karte hain.</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+
+        <!-- /fetch -->
+        <div style="background:var(--s2);border:1px solid rgba(255,159,10,.3);border-radius:8px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+            <code style="background:rgba(255,159,10,.15);color:var(--o);padding:3px 10px;border-radius:5px;font-size:12px">/fetch {mobile} {Full Name}</code>
+            <span style="background:rgba(57,255,20,.15);color:var(--g);font-size:10px;padding:2px 7px;border-radius:4px;font-family:'Share Tech Mono'">UIDAI OSINT</span>
+          </div>
+          <div style="font-size:11px;color:var(--td);line-height:1.8">
+            UIDAI portal pe <b style="color:var(--t)">Enrollment Number retrieve</b> karta hai mobile number aur naam se.<br>
+            <b style="color:var(--c)">Example:</b> <code style="color:var(--y)">/fetch 9876543210 Rahul Kumar Sharma</code><br>
+            <b style="color:var(--c)">Flow:</b> Bot UIDAI site kholega → Form fill karega → Captcha screenshot bheji → User solve kare → Result milega
+          </div>
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">
+            <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
+              ✅ <b style="color:var(--g)">Bot ka jawab jab sahi:</b> UIDAI result screenshot + text
+            </div>
+            <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
+              ⚠️ <b style="color:var(--y)">Wrong format:</b> <code>❌ Wrong format! Sahi tarika: /fetch 9876543210 Rahul Sharma</code>
+            </div>
+            <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
+              🔐 <b style="color:var(--c)">Captcha:</b> Screenshot bheji jaati hai → user reply kare → bot submit karta hai
+            </div>
+            <div style="font-size:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.08);border-radius:5px;padding:4px 8px;color:var(--td)">
+              ❌ <b style="color:var(--r)">Error hone pe:</b> Exact reason batata hai (browser missing, timeout, network, etc.)
+            </div>
+          </div>
+        </div>
+
+        <!-- /start -->
+        <div style="background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/start</code>
+            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Welcome message + video/APK (if configured)</span>
+          </div>
+        </div>
+
+        <!-- /redeem -->
+        <div style="background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/redeem {key}</code>
+            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Credit key redeem karo</span>
+          </div>
+        </div>
+
+        <!-- /save /stop -->
+        <div style="background:var(--s2);border:1px solid rgba(0,245,255,.2);border-radius:8px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/save</code>
+            <code style="background:rgba(0,245,255,.1);color:var(--c);padding:3px 10px;border-radius:5px;font-size:12px">/stop</code>
+            <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">Active page/state save ya cancel karo</span>
+          </div>
+        </div>
+
+        <!-- /broadcast -->
+        <div style="background:var(--s2);border:1px solid rgba(191,90,242,.2);border-radius:8px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <code style="background:rgba(191,90,242,.1);color:var(--p);padding:3px 10px;border-radius:5px;font-size:12px">/broadcast {message}</code>
+            <span style="background:rgba(191,90,242,.15);color:var(--p);font-size:10px;padding:2px 7px;border-radius:4px;font-family:'Share Tech Mono'">ADMIN ONLY</span>
+          </div>
+          <div style="font-size:10px;color:var(--td)">Saare users ko message bhejo (sirf Master Admin use kar sakta hai)</div>
+        </div>
+
+      </div>
+    </div>
+
     <div class="card">
 
-      <div class="sh"><div class="st">🚀 FLOW BUILDER</div>
+      <div class="sh"><div class="st">🚀 FLOW BUILDER <span style="font-size:10px;color:var(--td);font-family:'Share Tech Mono'">— Custom Commands</span></div>
 
         <div style="display:flex;gap:5px;flex-wrap:wrap">
           <button class="btn bg bsm" onclick="exportFlows()">📥 Export</button>
