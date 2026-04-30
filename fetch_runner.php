@@ -115,8 +115,9 @@ function runPythonScript(string $scrFile,int $timeout=180):void{
 
 // ─── Session / result files ───────────────────────────────────────────────────
 $safeUid=preg_replace('/\W/','_',$tgId?:$chatId);
-$sessFile=sys_get_temp_dir().'/uidaifetch_sess_'.$safeUid.'.json';
-$resFile =sys_get_temp_dir().'/uidaifetch_res_'.$safeUid.'.json';
+$tmpDir='/tmp';
+$sessFile=$tmpDir.'/uidaifetch_sess_'.$safeUid.'.json';
+$resFile =$tmpDir.'/uidaifetch_res_'.$safeUid.'.json';
 if(!$isResume&&file_exists($resFile))@unlink($resFile);
 
 // ─── Build vars ───────────────────────────────────────────────────────────────
@@ -261,7 +262,7 @@ open(RF,'w').write(json.dumps(R))
 PY;
 
 // ─── Run script ───────────────────────────────────────────────────────────────
-$scrFile=sys_get_temp_dir().'/uidaifetch_sc_'.$safeUid.'.py';
+$scrFile=$tmpDir.'/uidaifetch_sc_'.$safeUid.'.py';
 file_put_contents($scrFile,$script);
 runPythonScript($scrFile,180);
 @unlink($scrFile);
