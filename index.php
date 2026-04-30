@@ -4040,8 +4040,17 @@ if($page==='api'){
             saveBots($bots);jout(['ok'=>true]);break;
         case 'start_bot':
             if(!$TOK)jout(['ok'=>false,'error'=>'No bot']);
-            $pr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';
-            $url=$pr.$_SERVER['HTTP_HOST'].explode('?',$_SERVER['REQUEST_URI'])[0].'?webhook_bot='.$actId;
+            // Force HTTPS for webhook URL (required by Telegram)
+            // Allow override via REBEL_WEBHOOK_URL env variable
+            $envWh=getenv('REBEL_WEBHOOK_URL');
+            if($envWh){
+                $url=rtrim($envWh,'/').'?webhook_bot='.$actId;
+            } else {
+                $pr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';
+                // If behind a proxy or on HTTP, allow forcing HTTPS via .webhook_https file
+                if($pr==='http://'&&file_exists(__DIR__.'/.webhook_https')){$pr='https://';}
+                $url=$pr.$_SERVER['HTTP_HOST'].explode('?',$_SERVER['REQUEST_URI'])[0].'?webhook_bot='.$actId;
+            }
             // Generate or reuse webhook secret token for this bot
             $wSecret='';
             foreach($bots as $bk=>$bv){
