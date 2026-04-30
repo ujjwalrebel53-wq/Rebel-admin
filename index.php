@@ -3560,7 +3560,7 @@ if(isset($_GET['webhook_bot'])){
                 if($vpsRunner2!==''){
                     $payload2=json_encode(['mobile'=>$mobile2,'full_name'=>$name2,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'secret'=>$vpsSecret2,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'','captcha'=>$msgText,'resume'=>true]);
                     $ch2=curl_init();
-                    curl_setopt_array($ch2,[CURLOPT_URL=>$vpsRunner2,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload2,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false]);
+                    curl_setopt_array($ch2,[CURLOPT_URL=>$vpsRunner2,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload2,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>3]);
                     curl_exec($ch2);curl_close($ch2);
                 } else {
                     execUidaiFetch($botId,$chatId,$u,$db,$s,$token,$mobile2,$name2,['captcha'=>$msgText,'__uidaifetch_resume'=>true]);
@@ -3691,7 +3691,7 @@ if(isset($_GET['webhook_bot'])){
                     tg('sendMessage',['chat_id'=>$chatId,'text'=>"⏳ <b>Searching UIDAI...</b>\n\n📱 <b>Mobile:</b> <code>{$mobile}</code>\n👤 <b>Name:</b> <code>".htmlspecialchars($fullName,ENT_QUOTES,'UTF-8')."</code>\n\n<i>Please wait, captcha will appear shortly...</i>",'parse_mode'=>'HTML'],$token);
                     $payload=json_encode(['mobile'=>$mobile,'full_name'=>$fullName,'chat_id'=>$chatId,'token'=>$token,'bot_id'=>$botId,'secret'=>$vpsSecret,'tg_id'=>$uid,'tg_name'=>$u['name']??'','tg_username'=>$u['username']??'']);
                     $ch=curl_init();
-                    curl_setopt_array($ch,[CURLOPT_URL=>$vpsRunner,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false]);
+                    curl_setopt_array($ch,[CURLOPT_URL=>$vpsRunner,CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPHEADER=>['Content-Type: application/json'],CURLOPT_TIMEOUT=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>3]);
                     curl_exec($ch);curl_close($ch);
                 } else {
                     // Run locally
