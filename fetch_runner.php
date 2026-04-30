@@ -158,7 +158,12 @@ $pyBin=PYTHON_BIN;
 $script=<<<PY
 import sys,json,os,base64,time,random,re,tempfile
 _home=os.path.expanduser('~')
-for _sp in [os.path.join(_home,'.local','lib','python'+'.'.join(map(str,sys.version_info[:2])),'site-packages')]:
+for _sp in [
+    '/usr/local/lib/python3.12/dist-packages',
+    '/usr/local/lib/python3/dist-packages',
+    os.path.join(_home,'.local','lib','python'+'.'.join(map(str,sys.version_info[:2])),'site-packages'),
+    os.path.join(_home,'.local','lib','python'+str(sys.version_info[0]),'site-packages'),
+]:
     if _sp not in sys.path and os.path.isdir(_sp): sys.path.insert(0,_sp)
 SF='{$sf}'; RF='{$rf}'
 R={'steps':[],'status':'done','vars':{}}
@@ -245,7 +250,11 @@ R['vars']=V
 try:
     if _CTX: _CTX.close()
     if B: B.close()
-    if _p: _p.__exit__(None,None,None)
+    if _p:
+        try: _p.__exit__(None,None,None)
+        except:
+            try: _p.stop()
+            except: pass
 except: pass
 open(RF,'w').write(json.dumps(R))
 PY;
