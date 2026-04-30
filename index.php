@@ -1626,7 +1626,7 @@ function execUidaiFetch($botId,$chatId,$u,&$db,$s,$token,$mobile,$fullName,$extr
 
     // UIDAI — Retrieve EID/UID by Mobile Number
     $steps=[
-        ['type'=>'open','value'=>'https://resident.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
+        ['type'=>'open','value'=>'https://myaadhaar.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
         ['type'=>'wait_load','value'=>'networkidle','timeout'=>'25'],
         // Select "Mobile" tab/radio
         ['type'=>'wait_element','selector'=>'input[type="radio"][value="M"], #mobileRadio, label[for*="mobile"], input[name*="searchBy"]','timeout'=>'15','stop_on_error'=>false],

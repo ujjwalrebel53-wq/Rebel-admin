@@ -132,7 +132,7 @@ if($isResume&&$captcha!==''){
 
 // ─── Browser steps ────────────────────────────────────────────────────────────
 $steps=[
-    ['type'=>'open','value'=>'https://resident.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
+    ['type'=>'open','value'=>'https://myaadhaar.uidai.gov.in/retrieve-eid-uid','stop_on_error'=>true],
     ['type'=>'wait_load','value'=>'networkidle','timeout'=>'25'],
     ['type'=>'wait_element','selector'=>'input[type="radio"][value="M"],#mobileRadio,input[name*="searchBy"]','timeout'=>'15','stop_on_error'=>false],
     ['type'=>'js_eval','value'=>'(()=>{var r=document.querySelector(\'input[type="radio"][value="M"],input[type="radio"][id*="mobile"],input[name*="searchBy"][value="M"]\');if(r){r.click();return "clicked";}return "not_found";})()','var_name'=>'radio_clicked'],
