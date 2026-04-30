@@ -196,10 +196,11 @@ if not PW:
     R['status']='error';R['error']='Playwright not installed. Run: pip3 install playwright && playwright install chromium'
     open(RF,'w').write(json.dumps(R));sys.exit(1)
 def _goto(url):
-    try: P.goto(url,wait_until='networkidle',timeout=45000)
-    except:
-        try: P.goto(url,wait_until='domcontentloaded',timeout=45000)
-        except: P.goto(url,wait_until='load',timeout=30000)
+    try: P.goto(url,wait_until='commit',timeout=60000)
+    except: pass
+    try: P.wait_for_load_state('domcontentloaded',timeout=30000)
+    except: pass
+    time.sleep(3)
 def _ss(crop=None):
     f=tempfile.mktemp(suffix='.png')
     if crop and all(crop): P.screenshot(path=f,clip={'x':float(crop[0]),'y':float(crop[1]),'width':float(crop[2]),'height':float(crop[3])})
