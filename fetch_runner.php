@@ -159,6 +159,9 @@ $pyBin=PYTHON_BIN;
 $script=<<<PY
 import sys,json,os,base64,time,random,re,tempfile
 _home=os.path.expanduser('~')
+# Set Playwright browser path to root's cache (works for www-data too)
+os.environ['PLAYWRIGHT_BROWSERS_PATH']='/root/.cache/ms-playwright'
+os.environ['HOME']='/root'
 for _sp in [
     '/usr/local/lib/python3.12/dist-packages',
     '/usr/local/lib/python3/dist-packages',
