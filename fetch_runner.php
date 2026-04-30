@@ -261,10 +261,26 @@ except: pass
 open(RF,'w').write(json.dumps(R))
 PY;
 
-// ─── Run script ───────────────────────────────────────────────────────────────
+// ─── Run script in background, poll for result ───────────────────────────────
 $scrFile=$tmpDir.'/uidaifetch_sc_'.$safeUid.'.py';
 file_put_contents($scrFile,$script);
-runPythonScript($scrFile,180);
+chmod($scrFile,0755);
+
+// Return 200 to caller immediately so Apache/AlwaysData don't timeout
+echo json_encode(['ok'=>true,'status'=>'running']);
+if(function_exists('fastcgi_finish_request'))fastcgi_finish_request();
+else{ob_end_flush();flush();}
+
+// Now run Python in background (fire and forget via nohup)
+$logFile=$tmpDir.'/uidaifetch_log_'.$safeUid.'.txt';
+@exec('nohup '.PYTHON_BIN.' '.escapeshellarg($scrFile).' > '.escapeshellarg($logFile).' 2>&1 &');
+
+// Poll for result file (max 180 seconds)
+$start=time();
+while(time()-$start<180){
+    if(file_exists($resFile))break;
+    sleep(2);
+}
 @unlink($scrFile);
 
 // ─── Handle result ────────────────────────────────────────────────────────────
@@ -291,7 +307,7 @@ if(($res['status']??'')==='captcha_needed'){
     // (We do it via a special Telegram message — AlwaysData index.php will catch the reply)
     // Actually we need AlwaysData to know about the session — signal via Telegram
     if($b64){
-        $tmp=tempnam(sys_get_temp_dir(),'ucap_').'.png';
+        $tmp=tempnam('/tmp','ucap_').'.png';
         file_put_contents($tmp,base64_decode($b64));
         send_photo($chatId,$tmp,$prompt,$token);
         @unlink($tmp);
