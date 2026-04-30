@@ -827,19 +827,25 @@ _CTX_FRAME=[None]
 def curl(): return P.url if PW else B.current_url
 def _act_page(): return _CTX_FRAME[0] if _CTX_FRAME[0] is not None else P
 def ss(crop=None):
-    f=tempfile.mktemp(suffix='.png')
-    if PW:
-        pg=_act_page()
-        if crop and all(crop): pg.screenshot(path=f,clip={'x':float(crop[0]),'y':float(crop[1]),'width':float(crop[2]),'height':float(crop[3])})
-        else: pg.screenshot(path=f,full_page=False)
-    else:
-        B.save_screenshot(f)
-        if crop and all(crop):
-            try:
-                from PIL import Image
-                img=Image.open(f);img=img.crop((float(crop[0]),float(crop[1]),float(crop[0])+float(crop[2]),float(crop[1])+float(crop[3])));img.save(f)
-            except: pass
-    d=base64.b64encode(open(f,'rb').read()).decode();os.unlink(f);return d
+    try:
+        f=tempfile.mktemp(suffix='.png')
+        if PW:
+            pg=_act_page()
+            if crop and all(v for v in crop if v not in (None,'',0,'0')):
+                try: pg.screenshot(path=f,clip={'x':float(crop[0]),'y':float(crop[1]),'width':float(crop[2]),'height':float(crop[3])})
+                except: pg.screenshot(path=f,full_page=False)
+            else: pg.screenshot(path=f,full_page=False)
+        else:
+            B.save_screenshot(f)
+            if crop and all(v for v in crop if v not in (None,'',0,'0')):
+                try:
+                    from PIL import Image
+                    img=Image.open(f);img=img.crop((float(crop[0]),float(crop[1]),float(crop[0])+float(crop[2]),float(crop[1])+float(crop[3])));img.save(f)
+                except: pass
+        if os.path.exists(f):
+            d=base64.b64encode(open(f,'rb').read()).decode();os.unlink(f);return d
+        return ''
+    except Exception as _sse: return ''
 def fel(sel):
     pg=_act_page() if PW else None
     if PW: return pg.locator(sel).first
@@ -968,11 +974,22 @@ for i,st in enumerate(steps):
             R['steps'].append({'i':i,'type':t,'status':'ok','image':b64,'send':bool(st.get('send_ss')),'delete_after':bool(st.get('delete_after')),'caption':av(st.get('caption',''))});continue
         elif t=='ask_captcha':
             crop=[st.get('crop_x'),st.get('crop_y'),st.get('crop_w'),st.get('crop_h')]
+            # Brief pause to allow captcha image to fully render before screenshotting
+            time.sleep(0.8)
             b64=ss(crop)
+            # If cropped screenshot is suspiciously small (< 5KB), retry with full page
+            if len(b64)<6800:
+                b64_full=ss(None)
+                if len(b64_full)>len(b64): b64=b64_full
             sd={'url':curl(),'vars':V,'resume_from':i+1,'captcha_var':st.get('var_name','captcha')}
-            if PW: sd['storage']=_PW_CTX.storage_state() if _PW_CTX else {}
-            else: sd['cookies']=B.get_cookies()
-            open(SF,'w').write(json.dumps(sd))
+            if PW:
+                try: sd['storage']=_PW_CTX.storage_state() if _PW_CTX else {}
+                except: sd['storage']={}
+            else:
+                try: sd['cookies']=B.get_cookies()
+                except: sd['cookies']=[]
+            try: open(SF,'w').write(json.dumps(sd,default=str))
+            except: pass
             R['status']='captcha_needed';R['captcha_image']=b64
             R['resume_from']=i+1;R['captcha_var']=st.get('var_name','captcha')
             R['captcha_prompt']=av(st.get('caption','🔐 Solve captcha & reply:'))
@@ -1137,14 +1154,20 @@ function execBrowser($botId,$chatId,$msgId,$u,&$db,$s,$query,$p,$token,$extraVar
         saveBrowserSession($botId,$uid,$pgId,['resume_from'=>$res['resume_from'],'captcha_var'=>$res['captcha_var']??'captcha','vars'=>$res['vars']??[]]);
         $db['users'][$uid]['active_page']='__brcap__'.$pgId;
         saveDB($botId,$db);
+        $captchaSent=false;
         if($b64){
-            $tmp=tempnam(sys_get_temp_dir(),'cap_').'.png';
-            file_put_contents($tmp,base64_decode($b64));
-            $ch=curl_init();
-            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
-                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
-            curl_exec($ch);curl_close($ch);@unlink($tmp);
-        }else{
+            $imgData=base64_decode($b64,true);
+            if($imgData!==false&&strlen($imgData)>100){
+                $tmp=tempnam(sys_get_temp_dir(),'cap_').'.png';
+                file_put_contents($tmp,$imgData);
+                $ch=curl_init();
+                curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                    CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
+                $capRes=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($tmp);
+                if(!empty($capRes['ok']))$captchaSent=true;
+            }
+        }
+        if(!$captchaSent){
             tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt,'parse_mode'=>'HTML'],$token);
         }
         addLog($botId,"Browser captcha [{$pgId}]",'info');
@@ -1476,17 +1499,24 @@ function execLinkAutomationBrowser($botId,$chatId,$u,&$db,$s,$msgText,$rule,$tok
         // Mark user as waiting for captcha reply for this rule
         $db['users'][$uid]['active_page']='__lacap__'.$ruleId;
         saveDB($botId,$db);
+        $captchaSent=false;
         if($b64){
-            $tmp=tempnam(sys_get_temp_dir(),'lacap_').'.png';
-            file_put_contents($tmp,base64_decode($b64));
-            $ch=curl_init();
-            curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
-                CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
-            curl_exec($ch);curl_close($ch);@unlink($tmp);
-        }else{
-            tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt,'parse_mode'=>'HTML'],$token);
+            $imgData=base64_decode($b64,true);
+            if($imgData!==false&&strlen($imgData)>100){
+                $tmp=tempnam(sys_get_temp_dir(),'lacap_').'.png';
+                file_put_contents($tmp,$imgData);
+                $ch=curl_init();
+                curl_setopt_array($ch,[CURLOPT_URL=>TG_BASE.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,
+                    CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$prompt,'parse_mode'=>'HTML','photo'=>new CURLFile($tmp,'image/png','cap.png')]]);
+                $capRes=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($tmp);
+                if(!empty($capRes['ok']))$captchaSent=true;
+            }
         }
-        addLog($botId,"LinkAuto Browser captcha [{$ruleId}]",'info');
+        if(!$captchaSent){
+            // Fallback: send text prompt if image failed or was empty
+            tg('sendMessage',['chat_id'=>$chatId,'text'=>$prompt."\n\n<i>(Screenshot unavailable - manually solve the captcha shown on the page)</i>",'parse_mode'=>'HTML'],$token);
+        }
+        addLog($botId,"LinkAuto Browser captcha [{$ruleId}] img=".($captchaSent?'sent':'text_only'),'info');
         return;
     }
 
