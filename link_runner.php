@@ -32,11 +32,12 @@ if (!function_exists('str_contains')) {
 //   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚═╝ ╚═════╝
 // ────────────────────────────────────────────────────────────
 
-define('LR_VERSION', '1.0');
+define('LR_VERSION', '1.1');
 define('LR_CONFIG_FILE', __DIR__ . '/lr_config.json');
 define('LR_LOG_FILE',    __DIR__ . '/lr_logs.json');
 define('LR_TG_BASE',     'https://api.telegram.org/bot');
 define('LR_CURL_TO',     30);
+define('LR_SS_DIR',      __DIR__ . '/lr_screenshots/');
 
 // ─── Default config (loaded from lr_config.json if exists) ──
 $defaultConfig = [
@@ -49,6 +50,8 @@ $defaultConfig = [
     'webhook_token'=> '',             // Bot token for webhook mode
     'webhook_cmd'  => '/run',         // Command that triggers a run
 ];
+
+if (!is_dir(LR_SS_DIR)) @mkdir(LR_SS_DIR, 0755, true);
 
 // ─── Load/save config ───────────────────────────────────────
 function lrLoadConfig() {
@@ -191,6 +194,109 @@ function lrReplace($text, $vars) {
     return $text;
 }
 
+// ─── Screenshot via headless browser (Python) ───────────────
+function lrBuildScreenshotScript($url, $ssFile, $timeout = 30) {
+    $u  = addslashes($url);
+    $sf = addslashes($ssFile);
+    $to = (int)$timeout * 1000; // ms for Playwright
+    return <<<PY
+import sys, os, tempfile, time
+URL='{$u}'
+SF='{$sf}'
+TO={$to}
+UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+ARGS=['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--disable-infobars','--window-size=1280,900','--disable-gpu','--lang=en-IN','--ignore-certificate-errors']
+ok=False
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        b=None
+        for ch in ['chrome','msedge',None]:
+            try:
+                b=pw.chromium.launch(channel=ch,headless=True,args=ARGS) if ch else pw.chromium.launch(headless=True,args=ARGS)
+                break
+            except: pass
+        if b:
+            ctx=b.new_context(user_agent=UA,viewport={'width':1280,'height':900},locale='en-IN',timezone_id='Asia/Kolkata')
+            ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+            p=ctx.new_page()
+            try: p.goto(URL,wait_until='networkidle',timeout=TO)
+            except:
+                try: p.goto(URL,wait_until='domcontentloaded',timeout=TO)
+                except:
+                    try: p.goto(URL,wait_until='load',timeout=TO)
+                    except: pass
+            time.sleep(1)
+            p.screenshot(path=SF,full_page=False)
+            b.close()
+            ok=True
+except Exception as e:
+    pass
+if not ok:
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        o=Options()
+        for a in ARGS+['--headless=new']: o.add_argument(a)
+        o.add_experimental_option('excludeSwitches',['enable-automation'])
+        o.add_experimental_option('useAutomationExtension',False)
+        o.add_argument(f'--user-agent={UA}')
+        try: drv=webdriver.Chrome(options=o)
+        except:
+            from selenium.webdriver.chromium.options import ChromiumOptions
+            o2=ChromiumOptions()
+            for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--window-size=1280,900']: o2.add_argument(a)
+            drv=webdriver.Chrome(options=o2)
+        drv.set_page_load_timeout({$timeout})
+        try: drv.get(URL)
+        except: pass
+        time.sleep(1)
+        drv.save_screenshot(SF)
+        drv.quit()
+        ok=True
+    except Exception as e2:
+        pass
+if not ok:
+    sys.exit(1)
+PY;
+}
+
+function lrTakeScreenshot($url, $token, $chatId, $caption, $timeout = 30) {
+    if (!$token || !$chatId) return false;
+
+    $ssFile = LR_SS_DIR . 'ss_' . md5($url . microtime()) . '.png';
+    $pyFile  = LR_SS_DIR . 'ss_' . md5($url . microtime()) . '.py';
+    $script  = lrBuildScreenshotScript($url, $ssFile, $timeout);
+    file_put_contents($pyFile, $script);
+
+    $realTo = max(15, min(120, (int)$timeout));
+    exec('timeout ' . escapeshellarg($realTo + 10) . ' python3 ' . escapeshellarg($pyFile) . ' 2>/dev/null');
+    @unlink($pyFile);
+
+    if (!file_exists($ssFile)) return false;
+
+    // Send as photo via multipart
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => LR_TG_BASE . $token . '/sendPhoto',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_POSTFIELDS     => [
+            'chat_id'    => $chatId,
+            'caption'    => $caption,
+            'parse_mode' => 'HTML',
+            'photo'      => new CURLFile($ssFile, 'image/png', 'screenshot.png'),
+        ],
+    ]);
+    $r = json_decode(curl_exec($ch), true);
+    curl_close($ch);
+    @unlink($ssFile);
+    return !empty($r['ok']);
+}
+
 // ─── RUN all link rules and return results ──────────────────
 function lrRunAll($cfg, $extraVars = []) {
     $results = [];
@@ -215,6 +321,40 @@ function lrRunAll($cfg, $extraVars = []) {
         $timeout = max(5, min(120, (int)($link['timeout'] ?? 30)));
         $ssl     = !isset($link['ssl_verify']) || (bool)$link['ssl_verify'];
 
+        // Override chat_id per link if set
+        $chatId = trim($link['chat_id'] ?? '') ?: trim($cfg['chat_id'] ?? '');
+        $token  = trim($cfg['bot_token'] ?? '');
+
+        // ── Screenshot mode ──────────────────────────────────
+        $useScreenshot = !empty($link['screenshot_mode']);
+        if ($useScreenshot) {
+            $ssCaption = lrReplace(
+                $link['screenshot_caption'] ?? "📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}",
+                array_merge($vars, [
+                    'name' => htmlspecialchars($name, ENT_NOQUOTES, 'UTF-8'),
+                    'url'  => htmlspecialchars($url,  ENT_NOQUOTES, 'UTF-8'),
+                ])
+            );
+            $sent = false;
+            if ($token && $chatId) {
+                $sent = lrTakeScreenshot($url, $token, $chatId, $ssCaption, $timeout);
+            }
+            $results[] = [
+                'id'        => $id,
+                'name'      => $name,
+                'url'       => $url,
+                'code'      => 0,
+                'failed'    => !$sent,
+                'extracted' => $sent ? '[screenshot sent]' : '[screenshot failed]',
+                'sent'      => $sent,
+                'msg'       => $ssCaption,
+                'mode'      => 'screenshot',
+            ];
+            lrLog(($sent ? "SS OK [{$id}]" : "SS FAIL [{$id}]") . " → " . $name, $sent ? 'success' : 'error');
+            continue;
+        }
+
+        // ── Normal cURL mode ─────────────────────────────────
         $result  = lrFetch($url, $link['method'] ?? 'GET', $headers, $body, $timeout, $ssl);
         $rawBody = $result['body'] ?? '';
         $code    = $result['code'] ?? 0;
@@ -262,12 +402,8 @@ function lrRunAll($cfg, $extraVars = []) {
 
         $msgText = lrReplace($replyTpl, $allVars);
 
-        // Override chat_id per link if set
-        $chatId = trim($link['chat_id'] ?? '') ?: trim($cfg['chat_id'] ?? '');
-
         // Send if enabled
         $sent = false;
-        $token = trim($cfg['bot_token'] ?? '');
         if (!$failed && $token && $chatId) {
             $prefix = str_replace('\n', "\n", $cfg['send_prefix'] ?? '');
             $sent = lrSend($token, $chatId, $prefix . $msgText);
@@ -286,6 +422,7 @@ function lrRunAll($cfg, $extraVars = []) {
             'extracted' => $extracted,
             'sent'      => $sent,
             'msg'       => $msgText,
+            'mode'      => 'curl',
         ];
 
         lrLog(($failed ? "FAIL [{$id}] HTTP {$code}" : "OK [{$id}] HTTP {$code}") . " → " . $name, $failed ? 'error' : 'success');
@@ -415,8 +552,10 @@ if (isset($_GET['api_action'])) {
                     'response_path'  => trim($lk['response_path'] ?? ''),
                     'reply_template' => trim($lk['reply_template'] ?? "📌 <b>{name}</b>\n\n{response}"),
                     'error_message'  => trim($lk['error_message'] ?? '⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>'),
-                    'send_on_error'  => (bool)($lk['send_on_error'] ?? false),
-                    'chat_id'        => trim($lk['chat_id'] ?? ''),
+                    'send_on_error'      => (bool)($lk['send_on_error'] ?? false),
+                    'chat_id'            => trim($lk['chat_id'] ?? ''),
+                    'screenshot_mode'    => (bool)($lk['screenshot_mode'] ?? false),
+                    'screenshot_caption' => trim($lk['screenshot_caption'] ?? "📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}"),
                 ];
             }
             $cfg['links'] = $links;
@@ -693,19 +832,21 @@ function addLinkUI(preset={}){
   const id=preset.id||mkId();
   _links.push({
     id,
-    name:           preset.name||'New Link',
-    enabled:        preset.enabled!==false,
-    url:            preset.url||'',
-    method:         preset.method||'GET',
-    headers:        preset.headers||'',
-    body:           preset.body||'',
-    timeout:        preset.timeout||30,
-    ssl_verify:     preset.ssl_verify!==false,
-    response_path:  preset.response_path||'',
-    reply_template: preset.reply_template||'📌 <b>{name}</b>\n\n{response}',
-    error_message:  preset.error_message||'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',
-    send_on_error:  preset.send_on_error||false,
-    chat_id:        preset.chat_id||'',
+    name:               preset.name||'New Link',
+    enabled:            preset.enabled!==false,
+    url:                preset.url||'',
+    method:             preset.method||'GET',
+    headers:            preset.headers||'',
+    body:               preset.body||'',
+    timeout:            preset.timeout||30,
+    ssl_verify:         preset.ssl_verify!==false,
+    response_path:      preset.response_path||'',
+    reply_template:     preset.reply_template||'📌 <b>{name}</b>\n\n{response}',
+    error_message:      preset.error_message||'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',
+    send_on_error:      preset.send_on_error||false,
+    chat_id:            preset.chat_id||'',
+    screenshot_mode:    preset.screenshot_mode||false,
+    screenshot_caption: preset.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}',
   });
   renderLinks();
   // scroll to bottom
@@ -774,6 +915,20 @@ function buildLinkEl(lk,i){
     <label class="switch"><input type="checkbox" id="len_${lk.id}" ${lk.enabled?'checked':''} onchange="syncField('${lk.id}','enabled',this.checked);this.closest('.link-card').querySelector('.badge').textContent=this.checked?'ON':'OFF';this.closest('.link-card').querySelector('.badge').className='badge '+(this.checked?'ba':'bi')"> Enabled</label>
     <label class="switch"><input type="checkbox" id="lssl_${lk.id}" ${lk.ssl_verify!==false?'checked':''} onchange="syncField('${lk.id}','ssl_verify',this.checked)"> SSL Verify</label>
     <label class="switch"><input type="checkbox" id="lsoe_${lk.id}" ${lk.send_on_error?'checked':''} onchange="syncField('${lk.id}','send_on_error',this.checked)"> Send on Error</label>
+    <label class="switch"><input type="checkbox" id="lssm_${lk.id}" ${lk.screenshot_mode?'checked':''} onchange="syncField('${lk.id}','screenshot_mode',this.checked);toggleSsCaption('${lk.id}',this.checked)"> 📸 Screenshot Mode</label>
+  </div>
+  <div id="lss_wrap_${lk.id}" style="${lk.screenshot_mode?'':'display:none'}">
+    <div class="row" style="margin-top:8px">
+      <div class="f1">
+        <label>📸 Screenshot Caption (HTML, Telegram pe photo ke saath)</label>
+        <textarea id="lssc_${lk.id}" rows="2" onchange="syncField('${lk.id}','screenshot_caption',this.value)">${esc(lk.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')}</textarea>
+        <small style="color:var(--tf)">Vars: {name} {url} {ts} {date} {time} | Browser khulegaa → screenshot → Telegram photo</small>
+      </div>
+    </div>
+    <div style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--y)">
+      ⚠️ Screenshot mode ke liye server pe <b>Playwright</b> ya <b>Selenium</b> install hona chahiye.<br>
+      Install: <code style="background:var(--s2);padding:1px 4px;border-radius:3px">pip install playwright && playwright install chromium</code>
+    </div>
   </div>
   <div class="result-box" id="lr_${lk.id}"></div>
 </div>`;
@@ -785,6 +940,10 @@ function syncField(id,field,val){ const lk=_links.find(l=>l.id===id); if(lk)lk[f
 function toggleCard(id){
   const el=g('lcard_'+id);
   if(el) el.classList.toggle('collapsed');
+}
+function toggleSsCaption(id,show){
+  const w=g('lss_wrap_'+id);
+  if(w) w.style.display=show?'':'none';
 }
 function deleteLink(id){
   if(!confirm('Delete this link?')) return;
@@ -823,9 +982,11 @@ async function runSingle(linkId){
   if(!r.ok){ if(box) box.innerHTML='<span style="color:var(--r)">Error: '+(r.error||'')+'</span>'; return; }
   const res=r.result||{};
   if(box){
-    box.innerHTML=`<b style="color:${res.failed?'var(--r)':'var(--g)'}">${res.failed?'❌ FAILED':'✅ SUCCESS'}</b> HTTP <code>${res.code}</code>`
+    const isSS=res.mode==='screenshot';
+    box.innerHTML=`<b style="color:${res.failed?'var(--r)':'var(--g)'}">${res.failed?'❌ FAILED':'✅ SUCCESS'}</b>`
+      +(isSS?' <span class="tag">📸 Screenshot</span>':` HTTP <code>${res.code}</code>`)
       +(res.sent?' <span style="color:var(--g)">| Sent ✓</span>':'')
-      +`<br><small style="color:var(--td)">Response:</small><br><div class="mono" style="white-space:pre-wrap;max-height:200px;overflow:auto">${esc(String(res.extracted||''))}</div>`;
+      +(!isSS?`<br><small style="color:var(--td)">Response:</small><br><div class="mono" style="white-space:pre-wrap;max-height:200px;overflow:auto">${esc(String(res.extracted||''))}</div>`:'');
   }
   loadLogs();
 }
@@ -839,10 +1000,13 @@ function showResults(results){
 <div style="background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;margin-bottom:8px">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
     <b>${esc(r.name)}</b>
-    <span class="badge ${r.failed?'bi':'ba'}">${r.failed?'❌ FAILED':'✅ OK'} HTTP ${r.code}</span>
-    ${r.sent?'<span style="color:var(--g);font-size:11px">✓ Sent</span>':''}
+    <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
+      ${r.mode==='screenshot'?'<span class="tag">📸 Screenshot</span>':''}
+      <span class="badge ${r.failed?'bi':'ba'}">${r.failed?'❌ FAILED':'✅ OK'}${r.mode!=='screenshot'?' HTTP '+r.code:''}</span>
+      ${r.sent?'<span style="color:var(--g);font-size:11px">✓ Sent</span>':''}
+    </div>
   </div>
-  ${r.failed?'':'<div class="mono" style="margin-top:6px;white-space:pre-wrap;font-size:11px;max-height:100px;overflow:auto;color:var(--td)">'+esc(String(r.extracted||'')).slice(0,500)+'</div>'}
+  ${(!r.failed&&r.mode!=='screenshot')?'<div class="mono" style="margin-top:6px;white-space:pre-wrap;font-size:11px;max-height:100px;overflow:auto;color:var(--td)">'+esc(String(r.extracted||'')).slice(0,500)+'</div>':''}
 </div>`).join('');
 }
 
