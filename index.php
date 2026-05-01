@@ -1611,9 +1611,6 @@ if(isset($_GET['webhook_bot'])){
                         if(!empty(trim($wb['text']??''))&&!empty(trim($wb['url']??'')))
                             $wmRows[]=[['text'=>trim($wb['text']),'url'=>trim($wb['url'])]];
                     }
-                    // Contact in DM button — bot ka t.me link
-                    $wmDmUrl='https://t.me/'.($botUsername?:($db['username']??'bot'));
-                    $wmRows[]=[['text'=>'💬 Contact Me in DM','url'=>$wmDmUrl]];
                     if($wmRows)$wmKb=json_encode(['inline_keyboard'=>$wmRows]);
 
                     $wmMedia=trim($wm['media']??'');
