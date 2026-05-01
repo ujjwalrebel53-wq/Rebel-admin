@@ -32,7 +32,7 @@ if (!function_exists('str_contains')) {
 //   ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝     ╚═╝ ╚═════╝
 // ────────────────────────────────────────────────────────────
 
-define('LR_VERSION', '1.1');
+define('LR_VERSION', '1.2');
 define('LR_CONFIG_FILE', __DIR__ . '/lr_config.json');
 define('LR_LOG_FILE',    __DIR__ . '/lr_logs.json');
 define('LR_TG_BASE',     'https://api.telegram.org/bot');
@@ -194,86 +194,116 @@ function lrReplace($text, $vars) {
     return $text;
 }
 
-// ─── Screenshot via headless browser (Python) ───────────────
-function lrBuildScreenshotScript($url, $ssFile, $timeout = 30) {
-    $u  = addslashes($url);
-    $sf = addslashes($ssFile);
-    $to = (int)$timeout * 1000; // ms for Playwright
-    return <<<PY
-import sys, os, tempfile, time
-URL='{$u}'
-SF='{$sf}'
-TO={$to}
-UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-ARGS=['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled','--disable-infobars','--window-size=1280,900','--disable-gpu','--lang=en-IN','--ignore-certificate-errors']
-ok=False
-try:
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        b=None
-        for ch in ['chrome','msedge',None]:
-            try:
-                b=pw.chromium.launch(channel=ch,headless=True,args=ARGS) if ch else pw.chromium.launch(headless=True,args=ARGS)
-                break
-            except: pass
-        if b:
-            ctx=b.new_context(user_agent=UA,viewport={'width':1280,'height':900},locale='en-IN',timezone_id='Asia/Kolkata')
-            ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
-            p=ctx.new_page()
-            try: p.goto(URL,wait_until='networkidle',timeout=TO)
-            except:
-                try: p.goto(URL,wait_until='domcontentloaded',timeout=TO)
-                except:
-                    try: p.goto(URL,wait_until='load',timeout=TO)
-                    except: pass
-            time.sleep(1)
-            p.screenshot(path=SF,full_page=False)
-            b.close()
-            ok=True
-except Exception as e:
-    pass
-if not ok:
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        o=Options()
-        for a in ARGS+['--headless=new']: o.add_argument(a)
-        o.add_experimental_option('excludeSwitches',['enable-automation'])
-        o.add_experimental_option('useAutomationExtension',False)
-        o.add_argument(f'--user-agent={UA}')
-        try: drv=webdriver.Chrome(options=o)
-        except:
-            from selenium.webdriver.chromium.options import ChromiumOptions
-            o2=ChromiumOptions()
-            for a in ['--headless=new','--no-sandbox','--disable-dev-shm-usage','--window-size=1280,900']: o2.add_argument(a)
-            drv=webdriver.Chrome(options=o2)
-        drv.set_page_load_timeout({$timeout})
-        try: drv.get(URL)
-        except: pass
-        time.sleep(1)
-        drv.save_screenshot(SF)
-        drv.quit()
-        ok=True
-    except Exception as e2:
-        pass
-if not ok:
-    sys.exit(1)
-PY;
+// ─── Screenshot via free external APIs (no browser install needed) ──
+// Tries multiple free screenshot services in order until one works.
+function lrGetScreenshotUrl($targetUrl) {
+    $enc = urlencode($targetUrl);
+    // List of free screenshot API endpoints (no key needed)
+    return [
+        // screenshotone free tier (no API key, limited)
+        'https://api.screenshotone.com/take?url=' . $enc . '&viewport_width=1280&viewport_height=900&format=png&timeout=30',
+        // thum.io – simple, no key
+        'https://image.thum.io/get/width/1280/crop/900/' . $enc,
+        // Microlink – free, no key
+        'https://api.microlink.io/?url=' . $enc . '&screenshot=true&meta=false&embed=screenshot.url',
+        // htmlcsstoimage – URL passthrough screenshot
+        'https://hcti.io/v1/image?url=' . $enc,
+    ];
+}
+
+function lrFetchScreenshotBytes($targetUrl, $timeout = 30) {
+    // First try: thum.io — no key, returns PNG directly
+    $thumbUrl = 'https://image.thum.io/get/width/1280/crop/900/png/' . urlencode($targetUrl);
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $thumbUrl,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; LinkRunner/1.1)',
+    ]);
+    $data = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $ct   = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    curl_close($ch);
+    if ($code === 200 && $data && str_contains((string)$ct, 'image')) {
+        return ['bytes' => $data, 'source' => 'thum.io'];
+    }
+
+    // Second try: screenshotmachine.com free (no key for basic)
+    $sm = 'https://api.screenshotmachine.com/?url=' . urlencode($targetUrl) . '&dimension=1280x900&format=png&cacheLimit=0';
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $sm,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; LinkRunner/1.1)',
+    ]);
+    $data = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $ct   = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    curl_close($ch);
+    if ($code === 200 && $data && str_contains((string)$ct, 'image')) {
+        return ['bytes' => $data, 'source' => 'screenshotmachine'];
+    }
+
+    // Third try: Microlink API — returns JSON with screenshot URL, then fetch that
+    $ml = 'https://api.microlink.io/?url=' . urlencode($targetUrl) . '&screenshot=true&meta=false&embed=screenshot.url';
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $ml,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; LinkRunner/1.1)',
+    ]);
+    $raw = curl_exec($ch);
+    curl_close($ch);
+    $mlData = json_decode($raw, true);
+    $ssUrl = $mlData['data']['screenshot']['url'] ?? ($mlData['data']['screenshot'] ?? null);
+    if ($ssUrl && str_starts_with($ssUrl, 'http')) {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $ssUrl,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+        $imgData = curl_exec($ch);
+        $imgCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($imgCode === 200 && $imgData) {
+            return ['bytes' => $imgData, 'source' => 'microlink'];
+        }
+    }
+
+    return null;
 }
 
 function lrTakeScreenshot($url, $token, $chatId, $caption, $timeout = 30) {
     if (!$token || !$chatId) return false;
 
+    $result = lrFetchScreenshotBytes($url, $timeout);
+    if (!$result) return false;
+
     $ssFile = LR_SS_DIR . 'ss_' . md5($url . microtime()) . '.png';
-    $pyFile  = LR_SS_DIR . 'ss_' . md5($url . microtime()) . '.py';
-    $script  = lrBuildScreenshotScript($url, $ssFile, $timeout);
-    file_put_contents($pyFile, $script);
+    file_put_contents($ssFile, $result['bytes']);
 
-    $realTo = max(15, min(120, (int)$timeout));
-    exec('timeout ' . escapeshellarg($realTo + 10) . ' python3 ' . escapeshellarg($pyFile) . ' 2>/dev/null');
-    @unlink($pyFile);
-
-    if (!file_exists($ssFile)) return false;
+    if (!file_exists($ssFile) || filesize($ssFile) < 500) {
+        @unlink($ssFile);
+        return false;
+    }
 
     // Send as photo via multipart
     $ch = curl_init();
@@ -283,10 +313,10 @@ function lrTakeScreenshot($url, $token, $chatId, $caption, $timeout = 30) {
         CURLOPT_POST           => true,
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_SSL_VERIFYHOST => 2,
-        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_TIMEOUT        => 40,
         CURLOPT_POSTFIELDS     => [
             'chat_id'    => $chatId,
-            'caption'    => $caption,
+            'caption'    => $caption . "\n<i>via " . ($result['source'] ?? 'API') . "</i>",
             'parse_mode' => 'HTML',
             'photo'      => new CURLFile($ssFile, 'image/png', 'screenshot.png'),
         ],
@@ -294,6 +324,20 @@ function lrTakeScreenshot($url, $token, $chatId, $caption, $timeout = 30) {
     $r = json_decode(curl_exec($ch), true);
     curl_close($ch);
     @unlink($ssFile);
+
+    // If file upload failed (Telegram rejected PNG), try sending as URL directly
+    if (empty($r['ok'])) {
+        // Try sending the screenshot URL directly as a photo URL (microlink/thum.io)
+        $thumbUrl = 'https://image.thum.io/get/width/1280/crop/900/png/' . urlencode($url);
+        $r2 = lrTg('sendPhoto', [
+            'chat_id'    => $chatId,
+            'photo'      => $thumbUrl,
+            'caption'    => $caption,
+            'parse_mode' => 'HTML',
+        ], $token);
+        return !empty($r2['ok']);
+    }
+
     return !empty($r['ok']);
 }
 
@@ -925,9 +969,9 @@ function buildLinkEl(lk,i){
         <small style="color:var(--tf)">Vars: {name} {url} {ts} {date} {time} | Browser khulegaa → screenshot → Telegram photo</small>
       </div>
     </div>
-    <div style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--y)">
-      ⚠️ Screenshot mode ke liye server pe <b>Playwright</b> ya <b>Selenium</b> install hona chahiye.<br>
-      Install: <code style="background:var(--s2);padding:1px 4px;border-radius:3px">pip install playwright && playwright install chromium</code>
+    <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--g)">
+      ✅ <b>Koi browser install nahi chahiye!</b> Free screenshot APIs use hoti hain (thum.io → screenshotmachine → microlink).<br>
+      Bas URL dalo, screenshot automatically bot pe aa jayega.
     </div>
   </div>
   <div class="result-box" id="lr_${lk.id}"></div>
