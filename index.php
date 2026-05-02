@@ -4861,6 +4861,55 @@ if($page==='api'){
             file_put_contents(__DIR__.'/bot_config.json',json_encode($lrBotCfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);
             lrLog('Python Aadhaar bot config saved','info');jout(['ok'=>true]);break;
 
+        // ─── Aadhaar Bot Testing & Monitoring Actions ────────
+        case 'ab_set_webhook':
+            $abC=lrLoadConfig();$abTok=trim($body['token']??$abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set — pehle config save karo']);
+            $abPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';
+            $abWUrl=$abPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?py_webhook=1';
+            $abR=lrTg('setWebhook',['url'=>$abWUrl,'allowed_updates'=>['message','channel_post','callback_query']],$abTok);
+            lrLog('Aadhaar bot webhook '.($abR['ok']??false?'set':'failed').': '.$abWUrl,'info');
+            jout(['ok'=>$abR['ok']??false,'webhook_url'=>$abWUrl,'tg'=>$abR]);break;
+
+        case 'ab_remove_webhook':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $abR=lrTg('deleteWebhook',[],$abTok);jout(['ok'=>$abR['ok']??false]);break;
+
+        case 'ab_bot_info':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $abMe=lrTg('getMe',[],$abTok);$abWh=lrTg('getWebhookInfo',[],$abTok);
+            jout(['ok'=>true,'me'=>$abMe['result']??null,'webhook'=>$abWh['result']??null]);break;
+
+        case 'ab_send_test':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            $abCid=trim($body['chat_id']??'');$abText=trim($body['text']??'✅ Aadhaar Bot test — working!');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            if(!$abCid)jout(['ok'=>false,'error'=>'Chat ID required']);
+            $abR=lrTg('sendMessage',['chat_id'=>$abCid,'text'=>$abText,'parse_mode'=>'HTML'],$abTok);
+            lrLog('Test message → chat='.$abCid.' ok='.json_encode($abR['ok']??false),'info');
+            jout(['ok'=>$abR['ok']??false,'tg'=>$abR]);break;
+
+        case 'ab_get_sessions':
+            $abSessions=file_exists(LR_SESSION_FILE)?(json_decode(file_get_contents(LR_SESSION_FILE),true)?:[]):[];
+            jout(['ok'=>true,'sessions'=>$abSessions,'total'=>count($abSessions)]);break;
+
+        case 'ab_clear_sessions':
+            file_put_contents(LR_SESSION_FILE,'{}',LOCK_EX);
+            lrLog('All bot sessions cleared','warn');jout(['ok'=>true]);break;
+
+        case 'ab_delete_session':
+            $abCid=trim($body['chat_id']??'');if(!$abCid)jout(['ok'=>false,'error'=>'chat_id required']);
+            lrSessionDel($abCid);lrLog("Session deleted for chat={$abCid}",'info');jout(['ok'=>true]);break;
+
+        case 'ab_get_logs':
+            $abLogs=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];
+            jout(['ok'=>true,'data'=>array_slice($abLogs,0,200)]);break;
+
+        case 'ab_clear_logs':
+            file_put_contents(LR_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
         default:jout(['ok'=>false,'error'=>'Unknown action']);
     }
 }
@@ -7191,9 +7240,32 @@ td{padding:9px 11px;vertical-align:middle;}
       <div class="sh"><div class="st" style="color:var(--g)">⚡ QUICK ACTIONS</div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed" onclick="adharSaveConfig()">💾 Save Config</button>
-        <button class="btn bg bsm" onclick="adharLoadConfig()">🔄 Refresh</button>
-        <button class="btn bd bsm" onclick="adharResetDefaults()">↩️ Reset to Defaults</button>
+        <button class="btn bg bsm" onclick="adharSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="adharRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="adharCheckBotInfo()">🔍 Bot Status</button>
+        <button class="btn bsu bsm" onclick="adharSendTestMsg()">📨 Send Test Message</button>
+        <button class="btn bg bsm" onclick="adharLoadLogs()">📋 Logs</button>
+        <button class="btn bd bsm" onclick="adharClearLogs()">🗑️ Clear Logs</button>
+        <button class="btn bg bsm" onclick="adharLoadSessions()">👥 Active Sessions</button>
+        <button class="btn bd bsm" onclick="adharClearSessions()">🧹 Clear Sessions</button>
+        <button class="btn bd bsm" onclick="adharResetDefaults()">↩️ Reset Defaults</button>
       </div>
+    </div>
+
+    <!-- Bot Status Card -->
+    <div class="card" id="ab-status-card" style="display:none">
+      <div class="sh"><div class="st" id="ab-status-title" style="color:#63b3ed">📊 Status</div><button class="btn bd bsm" onclick="g('ab-status-card').style.display='none'">✕</button></div>
+      <div id="ab-status-body"></div>
+    </div>
+
+    <!-- Test Message Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">📨 TEST MESSAGE</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">💬 Chat ID (test message bhejne ke liye)</label><input type="text" id="ab-test-chat" class="fi" placeholder="apna Telegram Chat ID"></div>
+        <div class="fgrp"><label class="fl">📝 Message Text</label><input type="text" id="ab-test-text" class="fi" value="✅ Aadhaar Bot test message — working!" placeholder="Test message text"></div>
+      </div>
+      <div id="ab-test-result" style="display:none;margin-top:8px;font-size:12px;padding:8px;background:var(--s2);border-radius:6px"></div>
     </div>
 
     <!-- Bot Credentials -->
@@ -7266,6 +7338,42 @@ td{padding:9px 11px;vertical-align:middle;}
     <div class="card">
       <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;padding:12px;font-size:14px" onclick="adharSaveConfig()">💾 Save Python Aadhaar Bot Config</button>
       <div id="ab-save-result" style="margin-top:10px;font-size:12px;display:none"></div>
+    </div>
+
+    <!-- Webhook Info Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">🔗 WEBHOOK INFO</div></div>
+      <div style="font-size:12px;color:var(--td);line-height:2;background:var(--s2);padding:12px;border-radius:8px;border:1px solid var(--b)">
+        <b style="color:var(--t)">Set Webhook URL (PHP side):</b><br>
+        <code id="ab-webhook-url" style="color:#63b3ed;font-size:11px;word-break:break-all"><?php $abPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';echo htmlspecialchars($abPr.($_SERVER['HTTP_HOST']??'yoursite.com').strtok($_SERVER['REQUEST_URI']??'/','?').'?rbd_webhook=1'); ?></code><br><br>
+        <b style="color:var(--t)">Python bot ke liye webhook URL:</b><br>
+        <code id="ab-py-webhook-url" style="color:var(--g);font-size:11px;word-break:break-all"><?php echo htmlspecialchars($abPr.($_SERVER['HTTP_HOST']??'yoursite.com').strtok($_SERVER['REQUEST_URI']??'/','?')); ?>?py_webhook=1</code><br>
+        <div style="margin-top:8px;font-size:11px;color:var(--tf)">💡 Python bot ka token alag ho sakta hai — Set Webhook button uska token use karta hai.</div>
+      </div>
+    </div>
+
+    <!-- Active Sessions Card -->
+    <div class="card">
+      <div class="sh">
+        <div class="st" style="color:#63b3ed">👥 ACTIVE BOT SESSIONS</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="adharLoadSessions()">🔄 Refresh</button>
+          <button class="btn bd bsm" onclick="adharClearSessions()">🧹 Clear All</button>
+        </div>
+      </div>
+      <div id="ab-sessions-body"><div style="color:var(--td);font-size:12px;text-align:center;padding:16px">Click 🔄 Refresh to load sessions</div></div>
+    </div>
+
+    <!-- Logs Card -->
+    <div class="card">
+      <div class="sh">
+        <div class="st" style="color:#63b3ed">📋 AADHAAR BOT LOGS</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="adharLoadLogs()">🔄 Refresh</button>
+          <button class="btn bd bsm" onclick="adharClearLogs()">🗑️ Clear</button>
+        </div>
+      </div>
+      <div class="log-t" id="ab-log-box"><div style="color:var(--td)">Loading...</div></div>
     </div>
   </div>
 
@@ -10436,7 +10544,7 @@ const _abElMap={
   'ab-success-msg':'py_success_msg','ab-cancel-msg':'py_cancel_msg','ab-error-prefix':'py_error_prefix',
 };
 
-function adharBotInit(){ adharLoadConfig(); }
+function adharBotInit(){ adharLoadConfig(); adharLoadLogs(); adharLoadSessions(); adharCheckBotInfo(); }
 
 async function adharLoadConfig(){
   const r=await api('lr_get_py_config');if(!r.ok){toast('Config load failed','error');return;}
@@ -10456,6 +10564,125 @@ async function adharSaveConfig(){
     toast('Error: '+(r.error||''),'error');
     if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Save failed')+'</span>';}
   }
+}
+
+// ── Aadhaar Bot — Webhook ─────────────────────────────────
+async function adharSetWebhook(){
+  const tok=g('ab-token')?.value.trim();
+  toast('Setting webhook...','info');
+  const r=await api('ab_set_webhook',{token:tok||''});
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  card.style.display='block';title.textContent='🔗 Webhook Status';
+  if(r.ok){
+    toast('✅ Webhook set!','success');
+    body.innerHTML=`<div style="font-size:12px;line-height:2">
+      <span style="color:var(--g)">✅ Webhook set successfully!</span><br>
+      <b>URL:</b> <code style="color:#63b3ed;word-break:break-all">${r.webhook_url||''}</code><br>
+      <b>TG Response:</b> <code style="font-size:11px">${JSON.stringify(r.tg||{})}</code>
+    </div>`;
+  }else{
+    toast('❌ '+(r.error||r.tg?.description||'Failed'),'error');
+    body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ ${r.error||JSON.stringify(r.tg||{})}</div>`;
+  }
+}
+
+async function adharRemoveWebhook(){
+  const r=await api('ab_remove_webhook');
+  r.ok?toast('Webhook removed','info'):toast('Error: '+(r.error||''),'error');
+}
+
+// ── Aadhaar Bot — Bot Info / Status ──────────────────────
+async function adharCheckBotInfo(){
+  toast('Checking bot status...','info');
+  const r=await api('ab_bot_info');
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  card.style.display='block';title.textContent='🔍 Bot Status';
+  if(!r.ok){body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ ${r.error||'Token not set ya invalid'}</div>`;toast('❌ '+(r.error||''),'error');return;}
+  const me=r.me||{};const wh=r.webhook||{};
+  const whOk=!!(wh.url);
+  body.innerHTML=`<div style="font-size:12px;line-height:2.2">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:var(--s2);padding:10px;border-radius:8px">
+      <span style="font-size:28px">🤖</span>
+      <div>
+        <div style="font-weight:700;color:var(--t)">${me.first_name||'Unknown'} <span style="color:var(--td);font-weight:400">@${me.username||'?'}</span></div>
+        <div style="font-size:11px;color:var(--td)">ID: <code>${me.id||'?'}</code></div>
+      </div>
+      <span style="margin-left:auto;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;${whOk?'background:rgba(57,255,20,.15);color:var(--g);border:1px solid rgba(57,255,20,.3)':'background:rgba(255,45,85,.15);color:var(--r);border:1px solid rgba(255,45,85,.3)'}">${whOk?'🟢 ONLINE':'🔴 OFFLINE'}</span>
+    </div>
+    <b>Webhook URL:</b> <code style="font-size:11px;color:${whOk?'var(--g)':'var(--r)'};word-break:break-all">${wh.url||'Not set'}</code><br>
+    <b>Pending Updates:</b> <code>${wh.pending_update_count??0}</code><br>
+    ${wh.last_error_message?`<b style="color:var(--r)">Last Error:</b> <code style="color:var(--r)">${wh.last_error_message}</code><br>`:''}
+    <b>Bot can join groups:</b> ${me.can_join_groups?'✅':'❌'}<br>
+    <b>Can read all messages:</b> ${me.can_read_all_group_messages?'✅':'❌'}
+  </div>`;
+  toast('✅ Bot info loaded','success');
+}
+
+// ── Aadhaar Bot — Test Message ────────────────────────────
+async function adharSendTestMsg(){
+  const cid=g('ab-test-chat')?.value.trim();
+  const txt=g('ab-test-text')?.value.trim();
+  if(!cid){toast('Chat ID dalo pehle','error');return;}
+  toast('Sending...','info');
+  const r=await api('ab_send_test',{chat_id:cid,text:txt});
+  const res=g('ab-test-result');
+  if(res){res.style.display='block';}
+  if(r.ok){
+    toast('✅ Message sent!','success');
+    if(res)res.innerHTML='<span style="color:var(--g)">✅ Message successfully sent to <code>'+cid+'</code></span>';
+  }else{
+    toast('❌ '+(r.tg?.description||r.error||'Failed'),'error');
+    if(res)res.innerHTML='<span style="color:var(--r)">❌ '+(r.tg?.description||r.error||'Send failed')+'</span>';
+  }
+}
+
+// ── Aadhaar Bot — Sessions ────────────────────────────────
+async function adharLoadSessions(){
+  const r=await api('ab_get_sessions');
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  const sessBody=g('ab-sessions-body');
+  if(!r.ok){if(sessBody)sessBody.innerHTML='<div style="color:var(--r);font-size:12px">Error loading sessions</div>';return;}
+  const sessions=r.sessions||{};const total=r.total||0;
+  if(total===0){if(sessBody)sessBody.innerHTML='<div style="color:var(--g);font-size:12px;text-align:center;padding:12px">✅ Koi active session nahi hai.</div>';return;}
+  let rows='';
+  Object.entries(sessions).forEach(([cid,sess])=>{
+    const step=sess.step??0;const total2=sess.fields?.length??0;
+    const linkId=sess.link_id||'?';
+    const answers=Object.entries(sess.answers||{}).map(([k,v])=>`<b>${k}:</b> ${v}`).join(' | ')||'—';
+    rows+=`<tr>
+      <td style="font-family:monospace;font-size:11px">${cid}</td>
+      <td><code style="font-size:11px">${linkId}</code></td>
+      <td style="color:var(--c)">${step}/${total2}</td>
+      <td style="font-size:11px;color:var(--td)">${answers}</td>
+      <td><button class="btn bd bsm" onclick="adharDeleteSession('${cid}')">🗑️</button></td>
+    </tr>`;
+  });
+  if(sessBody)sessBody.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--td)">Active Sessions: <b style="color:#63b3ed">${total}</b></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Link</th><th>Step</th><th>Answers</th><th>Del</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  toast('Sessions loaded','info');
+}
+
+async function adharDeleteSession(cid){
+  const r=await api('ab_delete_session',{chat_id:cid});
+  r.ok?toast('Session deleted: '+cid,'info'):toast('Error','error');
+  adharLoadSessions();
+}
+
+async function adharClearSessions(){
+  if(!confirm('Sab active sessions clear karein?'))return;
+  const r=await api('ab_clear_sessions');
+  r.ok?toast('✅ All sessions cleared','success'):toast('Error','error');
+  const sb=g('ab-sessions-body');if(sb)sb.innerHTML='<div style="color:var(--g);font-size:12px;text-align:center;padding:12px">✅ All sessions cleared.</div>';
+}
+
+// ── Aadhaar Bot — Logs ────────────────────────────────────
+async function adharLoadLogs(){
+  const r=await api('ab_get_logs');const box=g('ab-log-box');if(!box)return;
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function adharClearLogs(){
+  if(!confirm('Sab logs delete karein?'))return;
+  await api('ab_clear_logs');adharLoadLogs();toast('Logs cleared','info');
 }
 
 async function adharResetDefaults(){
