@@ -6993,6 +6993,41 @@ td{padding:9px 11px;vertical-align:middle;}
       <button class="btn bsu" onclick="lrSaveConfig()" style="width:100%;margin-top:8px">💾 Save Config</button>
     </div>
 
+    <!-- Python Debugger Card -->
+    <div class="card" style="border-color:rgba(191,90,242,.4)">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#bf5af2">🐍 PYTHON ADHAR DEBUGGER</div>
+          <div style="font-size:11px;color:var(--td);margin-top:3px">Python <code style="color:#bf5af2">requests</code> code paste karo → automatically Link Runner mein import ho jayega</div>
+        </div>
+        <button class="btn bsm" style="background:rgba(191,90,242,.15);color:#bf5af2;border:1px solid rgba(191,90,242,.4)" onclick="lrTogglePyDebugger()">▼ Show / Hide</button>
+      </div>
+      <div id="lr-py-debugger" style="display:none">
+        <div style="background:rgba(191,90,242,.06);border:1px solid rgba(191,90,242,.2);border-radius:8px;padding:10px;font-size:11px;color:var(--td);margin-bottom:12px;line-height:1.8">
+          <b style="color:#bf5af2">Kaise use kare:</b><br>
+          1️⃣ Python <code style="color:#bf5af2">requests</code> snippet paste karo neeche<br>
+          2️⃣ <b style="color:var(--g)">🔍 Parse &amp; Import</b> click karo<br>
+          3️⃣ URL, Method, Headers, Body automatically extract hoke naya Link Rule ban jayega<br>
+          4️⃣ <b>💾 Save All</b> click karo<br><br>
+          <b>Supported formats:</b><br>
+          <code style="color:#bf5af2">requests.post('url', headers={...}, json={...})</code><br>
+          <code style="color:#bf5af2">requests.get('url', headers={...})</code><br>
+          <code style="color:#bf5af2">requests.put('url', data='body')</code>
+        </div>
+        <div class="fgrp mb">
+          <label class="fl">🐍 Python Code (requests snippet)</label>
+          <textarea id="lr-py-input" class="fi fta" rows="8" style="font-family:'Share Tech Mono',monospace;font-size:12px;min-height:160px" placeholder="import requests&#10;&#10;response = requests.post(&#10;    'https://api.example.com/data',&#10;    headers={&#10;        'Authorization': 'Bearer YOUR_TOKEN',&#10;        'Content-Type': 'application/json'&#10;    },&#10;    json={&#10;        'key': 'value'&#10;    }&#10;)&#10;print(response.json())"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn bsm" style="background:rgba(191,90,242,.2);color:#bf5af2;border:1px solid rgba(191,90,242,.4)" onclick="lrParsePython()">🔍 Parse &amp; Import as New Link</button>
+          <button class="btn bg bsm" onclick="lrParsePythonDebug()">🐛 Debug Only (show parsed)</button>
+          <button class="btn bsm" style="background:var(--s2);color:var(--td);border:1px solid var(--b)" onclick="g('lr-py-input').value='';g('lr-py-result').style.display='none'">🗑️ Clear</button>
+        </div>
+        <div id="lr-py-result" style="display:none;margin-top:12px;background:var(--s2);border:1px solid var(--b);border-radius:8px;padding:12px;font-size:12px;font-family:'Share Tech Mono',monospace">
+        </div>
+      </div>
+    </div>
+
     <!-- Link Rules Card -->
     <div class="card">
       <div class="sh"><div class="st" style="color:var(--c)">🔗 LINK RULES <span id="lr-link-count" style="background:rgba(0,245,255,.1);color:var(--c);padding:2px 8px;border-radius:4px;font-size:10px;margin-left:6px">0</span></div><button class="btn bsu bsm" onclick="lrAddLink()">+ Add Link</button></div>
@@ -10138,4 +10173,83 @@ async function lrLoadLogs(){
   box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
 }
 async function lrClearLogs(){await api('lr_clear_logs');lrLoadLogs();toast('Logs cleared','info');}
+
+// ─── Python Adhar Debugger ────────────────────────────────
+function lrTogglePyDebugger(){
+  const d=g('lr-py-debugger');
+  if(d) d.style.display=d.style.display==='none'?'block':'none';
+}
+
+async function lrParsePython(){
+  const code=g('lr-py-input')?.value||'';
+  if(!code.trim()){toast('Python code paste karo pehle','error');return;}
+  toast('Parsing Python...','info');
+  const r=await api('parse_python',{python:code});
+  const resBox=g('lr-py-result');
+  if(!r.ok||!r.parsed){
+    toast('Parse failed — check Python format','error');
+    if(resBox){resBox.style.display='block';resBox.innerHTML='<span style="color:var(--r)">❌ Could not parse. Make sure it is a valid requests.get/post/put/delete snippet.</span>';}
+    return;
+  }
+  const p=r.parsed;
+  // Build a new link from parsed data
+  const id='py_'+Date.now();
+  const newLink={
+    id,
+    name: 'Python Import '+(new Date().toLocaleTimeString()),
+    enabled: true,
+    url: p.url||'',
+    method: p.method||'GET',
+    headers: p.headers_str||'',
+    body: p.body||'',
+    timeout: 30,
+    ssl_verify: true,
+    response_path: '',
+    reply_template: '📌 <b>{name}</b>\n\n{response}',
+    error_message: '⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',
+    send_on_error: false,
+    chat_id: '',
+    screenshot_mode: false,
+    screenshot_caption: '📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}',
+  };
+  _lrLinks.push(newLink);
+  lrRenderLinks();
+  // Scroll to new link
+  const c=g('lr-links-container');if(c)c.lastElementChild?.scrollIntoView({behavior:'smooth'});
+
+  const parts=[];
+  if(p.url)parts.push('✅ URL: <code>'+lrEsc(p.url.slice(0,60))+(p.url.length>60?'...':'')+'</code>');
+  if(p.method&&p.method!=='GET')parts.push('✅ Method: <b>'+lrEsc(p.method)+'</b>');
+  if(p.headers_str)parts.push('✅ Headers: '+p.headers_str.split('\n').length+' line(s)');
+  if(p.body)parts.push('✅ Body extracted');
+
+  if(resBox){
+    resBox.style.display='block';
+    resBox.innerHTML='<b style="color:var(--g)">✅ Import Successful! New link added.</b><br><br>'+parts.join('<br>');
+  }
+  toast('✅ Python imported as new link! Click 💾 Save All.','success');
+}
+
+async function lrParsePythonDebug(){
+  const code=g('lr-py-input')?.value||'';
+  if(!code.trim()){toast('Python code paste karo pehle','error');return;}
+  toast('Parsing...','info');
+  const r=await api('parse_python',{python:code});
+  const resBox=g('lr-py-result');
+  if(!r.ok||!r.parsed){
+    if(resBox){resBox.style.display='block';resBox.innerHTML='<span style="color:var(--r)">❌ Parse failed</span>';}
+    return;
+  }
+  const p=r.parsed;
+  if(resBox){
+    resBox.style.display='block';
+    resBox.innerHTML=
+      '<b style="color:#bf5af2">🐍 Parsed Result:</b><br><br>'+
+      '<b>Method:</b> <span style="color:var(--g)">'+(p.method||'GET')+'</span><br>'+
+      '<b>URL:</b> <code style="color:var(--c);word-break:break-all">'+(lrEsc(p.url)||'<span style="color:var(--r)">NOT FOUND</span>')+'</code><br><br>'+
+      '<b>Headers:</b><br><pre style="color:var(--td);font-size:11px;white-space:pre-wrap;margin-top:4px">'+(lrEsc(p.headers_str)||'(none)')+'</pre>'+
+      '<b>Body:</b><br><pre style="color:var(--td);font-size:11px;white-space:pre-wrap;margin-top:4px">'+(lrEsc(p.body)||'(none)')+'</pre>';
+  }
+  toast('Debug complete — result below','success');
+}
 </script></body></html>
