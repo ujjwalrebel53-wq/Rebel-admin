@@ -191,6 +191,393 @@ function sendDocument($chatId,$docUrl,$caption,$kb,$token){
     return tg('sendDocument',$p,$token);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ██████╗ ██████╗     ██████╗ ███████╗██████╗  ██████╗ ███████╗██╗████████╗
+// ██╔══██╗██╔══██╗    ██╔══██╗██╔════╝██╔══██╗██╔═══██╗██╔════╝██║╚══██╔══╝
+// ██████╔╝██████╔╝    ██║  ██║█████╗  ██████╔╝██║   ██║███████╗██║   ██║
+// ██╔══██╗██╔══██╗    ██║  ██║██╔══╝  ██╔═══╝ ██║   ██║╚════██║██║   ██║
+// ██║  ██║██████╔╝    ██████╔╝███████╗██║     ╚██████╔╝███████║██║   ██║
+//  ╚═╝  ╚═╝╚═════╝     ╚═════╝ ╚══════╝╚═╝      ╚═════╝ ╚══════╝╚═╝   ╚═╝
+// RockyBook Deposit Bot — Integrated Module
+// ═══════════════════════════════════════════════════════════════════════════
+define('RBD_VERSION',     '1.0');
+define('RBD_CONFIG_FILE', __DIR__ . '/rbd_config.json');
+define('RBD_LOG_FILE',    __DIR__ . '/rbd_logs.json');
+define('RBD_STATE_FILE',  __DIR__ . '/rbd_states.json');
+define('RBD_COOKIE_DIR',  __DIR__ . '/rbd_cookies/');
+define('RBD_QR_DIR',      __DIR__ . '/rbd_qr/');
+define('RBD_RATE_FILE',   __DIR__ . '/rbd_ratelimit.json');
+define('RBD_LEDGER_FILE', __DIR__ . '/rbd_ledger.json');
+define('RB_API_BASE',     'https://rockybook.vip/api');
+define('RBD_MIN_DEPOSIT', 500);
+define('RBD_BLOCK_MINUTES', 30);
+define('RBD_MAX_INCOMPLETE', 2);
+define('RBD_DEPOSIT_CLIENT', 'Ujjwal0999');
+define('RBD_WITHDRAWAL_CONTACT', '@Rebel_babyyy');
+if(!is_dir(RBD_COOKIE_DIR))@mkdir(RBD_COOKIE_DIR,0755,true);
+if(!is_dir(RBD_QR_DIR))@mkdir(RBD_QR_DIR,0755,true);
+
+$_rbdDefaultConfig=[
+    'admin_pass'     => 'rebel@2026',
+    'bot_token'      => '',
+    'admin_chat_id'  => '',
+    'rb_phone'       => '',
+    'rb_password'    => '',
+    'rb_branch'      => 'RBVIP1D',
+    'rb_bank_id'     => '',
+    'min_deposit'    => 500,
+    'max_deposit'    => 100000,
+    'welcome_msg'    => "🎯 <b>Rebel B2W</b>\n\nWelcome! Use /Deposit to make a deposit.\n\n💰 /Deposit — Deposit\n💸 /Withdrawal — Withdraw\n💳 /Balance — Balance\n❓ /Help — Help",
+    'deposit_thanks' => "✅ <b>Transaction Submitted!</b>\n\nAdmin will verify shortly.",
+];
+function rbdLoadConfig(){
+    global $_rbdDefaultConfig;
+    if(!file_exists(RBD_CONFIG_FILE))return$_rbdDefaultConfig;
+    $l=json_decode(file_get_contents(RBD_CONFIG_FILE),true);
+    return is_array($l)?array_merge($_rbdDefaultConfig,$l):$_rbdDefaultConfig;
+}
+function rbdSaveConfig($cfg){file_put_contents(RBD_CONFIG_FILE,json_encode($cfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdGetStates(){if(!file_exists(RBD_STATE_FILE))return[];return json_decode(file_get_contents(RBD_STATE_FILE),true)?:[];}
+function rbdSetState($cid,$state,$data=[]){$s=rbdGetStates();$s[(string)$cid]=['state'=>$state,'data'=>$data,'ts'=>time()];file_put_contents(RBD_STATE_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdGetState($cid){$s=rbdGetStates();$e=$s[(string)$cid]??null;if($e&&(time()-($e['ts']??0))>1800){rbdClearState($cid);return null;}return $e;}
+function rbdClearState($cid){$s=rbdGetStates();unset($s[(string)$cid]);file_put_contents(RBD_STATE_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdRlLoad(){if(!file_exists(RBD_RATE_FILE))return[];return json_decode(file_get_contents(RBD_RATE_FILE),true)?:[];}
+function rbdRlSave($d){file_put_contents(RBD_RATE_FILE,json_encode($d,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdRlIsBlocked($cid){$rl=rbdRlLoad();$rec=$rl[(string)$cid]??null;if(!$rec)return false;if(!empty($rec['blocked_until'])&&time()<$rec['blocked_until'])return $rec['blocked_until'];return false;}
+function rbdRlStart($cid){$rl=rbdRlLoad();$k=(string)$cid;if(!isset($rl[$k]))$rl[$k]=['incomplete'=>0,'blocked_until'=>0,'last_start'=>0];$rl[$k]['incomplete']++;$rl[$k]['last_start']=time();if($rl[$k]['incomplete']>=RBD_MAX_INCOMPLETE){$rl[$k]['blocked_until']=time()+(RBD_BLOCK_MINUTES*60);$rl[$k]['incomplete']=0;rbdRlSave($rl);return false;}rbdRlSave($rl);return true;}
+function rbdRlCompleted($cid){$rl=rbdRlLoad();$k=(string)$cid;if(isset($rl[$k])){$rl[$k]['incomplete']=0;$rl[$k]['blocked_until']=0;}rbdRlSave($rl);}
+function rbdRlRemaining($until){$s=max(0,$until-time());return ceil($s/60).' minute'.(ceil($s/60)==1?'':'s');}
+
+function rbdLdLoad(){if(!file_exists(RBD_LEDGER_FILE))return[];return json_decode(file_get_contents(RBD_LEDGER_FILE),true)?:[];}
+function rbdLdSave($d){file_put_contents(RBD_LEDGER_FILE,json_encode($d,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdLdGetUser($cid){$ld=rbdLdLoad();return $ld[(string)$cid]??['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];}
+function rbdLdAddDeposit($cid,$amount,$utr,$txnId=null){$ld=rbdLdLoad();$k=(string)$cid;if(!isset($ld[$k]))$ld[$k]=['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];$ld[$k]['balance']+=(float)$amount;$ld[$k]['deposits'][]=['amount'=>(float)$amount,'utr'=>$utr,'txn_id'=>$txnId,'time'=>date('c'),'status'=>'approved'];rbdLdSave($ld);}
+function rbdLdAddWithdrawal($cid,$amount){$ld=rbdLdLoad();$k=(string)$cid;if(!isset($ld[$k]))$ld[$k]=['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];$ld[$k]['withdrawals'][]=['amount'=>(float)$amount,'time'=>date('c'),'status'=>'pending'];rbdLdSave($ld);}
+
+function rbdLog($text,$type='info'){$l=file_exists(RBD_LOG_FILE)?(json_decode(file_get_contents(RBD_LOG_FILE),true)?:[]):[];array_unshift($l,['time'=>date('c'),'text'=>$text,'type'=>$type]);if(count($l)>500)$l=array_slice($l,0,500);file_put_contents(RBD_LOG_FILE,json_encode($l,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdTgSend($token,$cid,$text,$kb=null){$p=['chat_id'=>$cid,'text'=>$text,'parse_mode'=>'HTML','disable_web_page_preview'=>true];if($kb)$p['reply_markup']=json_encode($kb);return tg('sendMessage',$p,$token);}
+function rbdTgSendPhoto($token,$cid,$photoPath,$caption='',$kb=null){$ch=curl_init();$f=['chat_id'=>$cid,'caption'=>$caption,'parse_mode'=>'HTML','photo'=>new CURLFile($photoPath,'image/png','qr.png')];if($kb)$f['reply_markup']=json_encode($kb);curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>40,CURLOPT_POSTFIELDS=>$f]);$r=json_decode(curl_exec($ch),true);curl_close($ch);return $r;}
+
+function rbdApi($endpoint,$method='GET',$data=null,$cookieFile=null){
+    $url=RB_API_BASE.$endpoint;$cf=$cookieFile?:(RBD_COOKIE_DIR.'admin.txt');
+    $headers=['Content-Type: application/json','Accept: application/json','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36','Origin: https://rockybook.vip','Referer: https://rockybook.vip/'];
+    $ch=curl_init();$opts=[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>30,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_HTTPHEADER=>$headers,CURLOPT_COOKIEJAR=>$cf,CURLOPT_COOKIEFILE=>$cf];
+    $m=strtoupper($method);if($m==='POST'){$opts[CURLOPT_POST]=true;$opts[CURLOPT_POSTFIELDS]=$data!==null?json_encode($data):'{}';}elseif(in_array($m,['PUT','PATCH','DELETE'])){$opts[CURLOPT_CUSTOMREQUEST]=$m;if($data!==null)$opts[CURLOPT_POSTFIELDS]=json_encode($data);}
+    curl_setopt_array($ch,$opts);$raw=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+    return['code'=>$code,'raw'=>$raw?:'','data'=>json_decode($raw,true),'error'=>$err,'ok'=>$code>=200&&$code<300];
+}
+
+function rbdAdminLogin($cfg){
+    $cf=RBD_COOKIE_DIR.'admin.txt';
+    $check=rbdApi('/auth/fetchUserByToken','GET',null,$cf);
+    if($check['ok']&&isset($check['data']['user']))return $check['data']['user'];
+    $phone=trim($cfg['rb_phone']??'');$pass=trim($cfg['rb_password']??'');
+    if(!$phone||!$pass)return false;
+    $res=rbdApi('/auth/login','POST',['loginType'=>$phone,'password'=>$pass],$cf);
+    if(!$res['ok']||empty($res['data']))return false;
+    $d=$res['data'];return $d['user']??$d['data']??((!empty($d['success']))?$d:false);
+}
+
+function rbdGetAdminUser($cfg){
+    $cf=RBD_COOKIE_DIR.'admin_user.json';
+    if(file_exists($cf)&&(time()-filemtime($cf))<3600){$c=json_decode(file_get_contents($cf),true);if($c&&isset($c['_id']))return $c;}
+    $u=rbdAdminLogin($cfg);if($u&&is_array($u))file_put_contents($cf,json_encode($u,JSON_UNESCAPED_UNICODE),LOCK_EX);return $u;
+}
+
+function rbdGetDepositUserId($cfg){
+    $cf=RBD_COOKIE_DIR.'deposit_user.json';
+    if(file_exists($cf)&&(time()-filemtime($cf))<86400){$c=json_decode(file_get_contents($cf),true);if(!empty($c['_id']))return $c;}
+    $cn=RBD_DEPOSIT_CLIENT;$res=rbdApi('/user/getUsers?page=1&limit=100000');
+    if($res['ok']){$users=$res['data']['users']??$res['data']['data']??[];if(is_array($users)){foreach($users as $u){if(strtolower($u['clientName']??'')===strtolower($cn)){$found=['_id'=>$u['_id']??$u['id'],'clientName'=>$u['clientName']];file_put_contents($cf,json_encode($found,JSON_UNESCAPED_UNICODE),LOCK_EX);return $found;}}}}
+    rbdLog("Deposit user '{$cn}' not found — using admin as fallback",'error');return rbdGetAdminUser($cfg);
+}
+
+function rbdNormalizeBank($b){
+    if(!is_array($b)||empty($b))return null;
+    $n=['upiId'=>$b['upiId']??$b['upi']??$b['vpa']??null,'accNo'=>$b['accNo']??$b['accountNo']??$b['accountNumber']??$b['account_no']??null,'ifscCode'=>$b['ifscCode']??$b['ifsc']??$b['IFSC']??null,'bankName'=>$b['bankName']??$b['bank']??$b['bank_name']??null,'accHolderName'=>$b['accHolderName']??$b['holderName']??$b['accountHolder']??$b['name']??null,'isActive'=>$b['isActive']??true];
+    if($n['upiId']||$n['accNo']||$n['ifscCode'])return $n;return null;
+}
+
+function rbdGetBankDetails($cfg,$amount=500){
+    $branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://www.powerdreams.co/api/online/request/fetchAvailablePeer',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json','Origin: https://www.powerdreams.co','Referer: https://www.powerdreams.co/online/pay/'.$branch.'/test','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36'],CURLOPT_POSTFIELDS=>json_encode(['transactionType'=>'Deposit','branchUserName'=>$branch,'amount'=>(int)$amount])]);
+    $raw=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+    $data=json_decode($raw,true);rbdLog("fetchAvailablePeer HTTP={$code} branch={$branch} amount={$amount}",'info');
+    if(empty($data['success'])||empty($data['bankDetails'])){rbdLog("fetchAvailablePeer failed: ".($data['message']??'no bankDetails'),'error');return null;}
+    return rbdNormalizeBank($data['bankDetails']);
+}
+
+function rbdCreateDeposit($cfg,$userId,$amount,$mode='PowerPay'){
+    $branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $payload=['userId'=>$userId,'amount'=>(float)$amount,'transactionType'=>'Deposit','role'=>'User','mode'=>$mode,'branchUserName'=>$branch];
+    $res=rbdApi('/transaction/createTransaction','POST',$payload);if(!$res['ok'])return null;
+    $d=$res['data'];if(!empty($d['success'])&&isset($d['data']))return $d['data'];return $d;
+}
+
+function rbdFetchImage($url,$timeout=25){
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36']);
+    $data=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+    if($code===200&&$data&&strlen($data)>500)return $data;return null;
+}
+
+function rbdScreenshotUrl($url,$outputFile,$timeout=35){
+    $enc=urlencode($url);
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>"https://api.microlink.io/?url={$enc}&screenshot=true&meta=false&embed=screenshot.url&timeout=20000",CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_USERAGENT=>'Mozilla/5.0']);
+    $ml=json_decode(curl_exec($ch),true);curl_close($ch);
+    $ssUrl=$ml['data']['screenshot']['url']??$ml['data']['screenshot']??null;
+    if($ssUrl&&strncmp($ssUrl,'http',4)===0){$d=rbdFetchImage($ssUrl,20);if($d&&strlen($d)>500){file_put_contents($outputFile,$d);return 'microlink';}}
+    $d2=rbdFetchImage("https://image.thum.io/get/width/800/crop/1200/png/{$enc}",20);
+    if($d2&&strlen($d2)>500){file_put_contents($outputFile,$d2);return 'thum.io';}
+    return null;
+}
+
+function rbdFetchRealQR($txnId,$branch,$outputFile,$timeout=35){
+    $res=rbdApi("/transaction/fetch_powerPay_transaction_screenshot/{$txnId}");
+    if($res['ok']&&!empty($res['data'])){$d=$res['data'];$imgData=$d['screenshot']??$d['image']??$d['data']??$d['url']??$d['screenshotUrl']??null;if($imgData){if(strncmp($imgData,'data:image',10)===0){$bytes=base64_decode(preg_replace('/^data:image\/\w+;base64,/','',$imgData));if($bytes&&strlen($bytes)>500){file_put_contents($outputFile,$bytes);return 'rockybook-api';}}elseif(strncmp($imgData,'http',4)===0){$bytes=rbdFetchImage($imgData,20);if($bytes&&strlen($bytes)>500){file_put_contents($outputFile,$bytes);return 'rockybook-api-url';}}}}
+    $payUrl="https://www.powerdreams.co/online/pay/{$branch}/{$txnId}";$src=rbdScreenshotUrl($payUrl,$outputFile,$timeout);if($src)return "payment-page-{$src}";return null;
+}
+
+function rbdHandleDeposit($token,$cid,$userName,$cfg){
+    $blocked=rbdRlIsBlocked($cid);
+    if($blocked){rbdTgSend($token,$cid,"🚫 <b>Temporarily Restricted</b>\n\nYou started a deposit without completing it.\n⏳ Please wait <b>".rbdRlRemaining($blocked)."</b> before trying again.");return;}
+    $minDep=(int)($cfg['min_deposit']??RBD_MIN_DEPOSIT);$maxDep=(int)($cfg['max_deposit']??100000);
+    rbdTgSend($token,$cid,"💰 <b>Deposit Amount</b>\n\nMinimum: <b>₹".number_format($minDep)."</b>\nMaximum: <b>₹".number_format($maxDep)."</b>\n\n<i>Enter amount (e.g. 1000)</i>",['inline_keyboard'=>[[['text'=>'₹500','callback_data'=>'rbdamt_500'],['text'=>'₹1000','callback_data'=>'rbdamt_1000'],['text'=>'₹2000','callback_data'=>'rbdamt_2000']],[['text'=>'₹5000','callback_data'=>'rbdamt_5000'],['text'=>'₹10000','callback_data'=>'rbdamt_10000'],['text'=>'₹25000','callback_data'=>'rbdamt_25000']]]]);
+    rbdSetState($cid,'awaiting_amount',[]);
+}
+
+function rbdProcessAmount($token,$cid,$amount,$cfg){
+    $minDep=(int)($cfg['min_deposit']??RBD_MIN_DEPOSIT);$maxDep=(int)($cfg['max_deposit']??100000);
+    if($amount<$minDep){rbdTgSend($token,$cid,"❌ Minimum deposit is <b>₹".number_format($minDep)."</b>.");return false;}
+    if($amount>$maxDep){rbdTgSend($token,$cid,"❌ Maximum deposit is <b>₹".number_format($maxDep)."</b>.");return false;}
+    rbdTgSend($token,$cid,"⏳ <b>Processing...</b>\n\nCreating deposit request...");
+    $adminUser=rbdGetAdminUser($cfg);if(!$adminUser){rbdTgSend($token,$cid,"❌ Server error. Please contact admin.");rbdLog("Deposit failed: RB login failed chat={$cid}",'error');return false;}
+    $depositUser=rbdGetDepositUserId($cfg);$rbUserId=$depositUser['_id']??$depositUser['id']??($adminUser['_id']??null);$branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $txn=rbdCreateDeposit($cfg,$rbUserId,$amount);$txnId=$txn['_id']??$txn['id']??$txn['transactionId']??null;$mode=$txn['mode']??'PowerPay';
+    if(!$txnId){rbdTgSend($token,$cid,"❌ Transaction could not be created. Please try again later.");rbdLog("Deposit failed: no txnId chat={$cid} amount={$amount}",'error');return false;}
+    $bank=rbdGetBankDetails($cfg,$amount);$upiId=$bank['upiId']??null;$accNo=$bank['accNo']??null;$ifsc=$bank['ifscCode']??null;$bankNm=$bank['bankName']??null;$accName=$bank['accHolderName']??null;
+    $payPageUrl="https://www.powerdreams.co/online/pay/{$branch}/{$txnId}";
+    $kb=['inline_keyboard'=>[[['text'=>'✅ Payment Done — Submit UTR','callback_data'=>'rbdsubmitutr_'.$txnId]]]];
+    $bankMsg="🎯 <b>Rebel B2W Deposit Details</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n🔖 Txn ID: <code>{$txnId}</code>\n";
+    if($upiId||$accNo){$bankMsg.="\n<b>💳 Bank / UPI Details:</b>\n".($upiId?"📱 UPI ID: <code>{$upiId}</code>\n":'').($accName?"👤 Name: <b>{$accName}</b>\n":'').($accNo?"🔢 Acc No: <code>{$accNo}</code>\n":'').($ifsc?"🏛 IFSC: <code>{$ifsc}</code>\n":'').($bankNm?"🏦 Bank: {$bankNm}\n":'');}
+    else{$bankMsg.="\n🌐 <b>Payment Page:</b>\n<code>{$payPageUrl}</code>\n\n<i>Open the link above to scan QR and pay</i>\n";}
+    $bankMsg.="\n⚠️ <b>Send exact amount ₹".number_format($amount)." only</b>\n\nAfter payment, send your UTR or screenshot 👇";
+    rbdTgSend($token,$cid,"⏳ Fetching payment QR...");
+    $qrFile=RBD_QR_DIR.'qr_'.$cid.'_'.time().'.png';sleep(3);
+    $qrSource=rbdFetchRealQR($txnId,$branch,$qrFile);
+    if($qrSource&&file_exists($qrFile)&&filesize($qrFile)>500){$cap="📸 <b>Payment QR</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n".($upiId?"📱 UPI: <code>{$upiId}</code>\n":'')."🔖 Txn: <code>{$txnId}</code>";$r=rbdTgSendPhoto($token,$cid,$qrFile,$cap,null);@unlink($qrFile);if(!empty($r['ok'])){rbdTgSend($token,$cid,$bankMsg,$kb);goto rbd_save_state;}}
+    if($upiId){$upiStr="upi://pay?pa={$upiId}&am={$amount}&cu=INR&tn=RebelB2W";$qrApis=["https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=".urlencode($upiStr),"https://quickchart.io/qr?size=512&text=".urlencode($upiStr),"https://chart.googleapis.com/chart?cht=qr&chs=512x512&chl=".urlencode($upiStr)];$uqf=RBD_QR_DIR.'upi_'.$cid.'_'.time().'.png';$sent=false;foreach($qrApis as $qa){$bytes=rbdFetchImage($qa,12);if($bytes&&strlen($bytes)>500){file_put_contents($uqf,$bytes);$cap="📱 <b>UPI QR Code</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n📱 UPI ID: <code>{$upiId}</code>\n🔖 Txn ID: <code>{$txnId}</code>";$r=rbdTgSendPhoto($token,$cid,$uqf,$cap,null);@unlink($uqf);if(!empty($r['ok'])){$sent=true;rbdTgSend($token,$cid,$bankMsg,$kb);break;}}}if(!$sent)rbdTgSend($token,$cid,$bankMsg."\n\n🔗 UPI Pay: <code>{$upiStr}</code>",$kb);}
+    else{rbdTgSend($token,$cid,$bankMsg."\n\n🌐 Open this link to pay:\n".$payPageUrl,$kb);}
+    rbd_save_state:
+    rbdSetState($cid,'awaiting_utr',['amount'=>$amount,'txn_id'=>$txnId,'upi_id'=>$upiId,'pay_url'=>$payPageUrl]);
+    rbdRlStart($cid);
+    $acid=trim($cfg['admin_chat_id']??'');if($acid)rbdTgSend($token,$acid,"🆕 <b>New Deposit</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($amount)."\n🔖 Txn: <code>{$txnId}</code>\n".($upiId?"📱 UPI: <code>{$upiId}</code>\n":'')."🌐 Mode: {$mode}\n🕐 ".date('d/m/Y H:i:s'));
+    return true;
+}
+
+function rbdTgDownload($token,$fileId){$r=tg('getFile',['file_id'=>$fileId],$token);$fp=$r['result']['file_path']??null;if(!$fp)return null;$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>"https://api.telegram.org/file/bot{$token}/{$fp}",CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>30,CURLOPT_SSL_VERIFYPEER=>true]);$b=curl_exec($ch);curl_close($ch);return($b&&strlen($b)>100)?$b:null;}
+
+function rbdPdOcr($bytes,$mime='image/jpeg'){$tmp=sys_get_temp_dir().'/rbd_ss_'.uniqid().'.jpg';file_put_contents($tmp,$bytes);$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://www.powerdreams.co/api/online/ocr/extract-utr',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Origin: https://www.powerdreams.co','Referer: https://www.powerdreams.co/online/pay/','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)'],CURLOPT_POSTFIELDS=>['image'=>new CURLFile($tmp,$mime,'screenshot.jpg')]]);$raw=curl_exec($ch);curl_close($ch);@unlink($tmp);$data=json_decode($raw,true);if(!empty($data['success'])&&!empty($data['utr']))return trim($data['utr']);return null;}
+
+function rbdHandleScreenshotUtr($token,$cid,$msg,$state,$cfg){
+    $data=$state['data']??[];$amount=$data['amount']??0;$txnId=$data['txn_id']??null;$savedUtr=trim($data['utr']??'');
+    $photo=$msg['photo']??null;$doc=$msg['document']??null;
+    $fileId=null;$mime='image/jpeg';
+    if($photo){$largest=end($photo);$fileId=$largest['file_id'];}elseif($doc){$fileId=$doc['file_id'];$mime=$doc['mime_type']??'image/jpeg';}
+    if(!$fileId){rbdTgSend($token,$cid,"❌ Could not read the image. Please send a clear screenshot.");return;}
+    rbdTgSend($token,$cid,"⏳ Verifying your screenshot...");
+    $imageBytes=rbdTgDownload($token,$fileId);if(!$imageBytes){rbdTgSend($token,$cid,"❌ Could not download image. Please try again.");return;}
+    $ocrUtr=rbdPdOcr($imageBytes,$mime);
+    if($savedUtr&&$ocrUtr){$n1=strtoupper(preg_replace('/\s+/','',$savedUtr));$n2=strtoupper(preg_replace('/\s+/','',$ocrUtr));if($n1!==$n2){rbdTgSend($token,$cid,"❌ <b>UTR Didn't Match!</b>\n\nYou entered: <code>{$savedUtr}</code>\nScreenshot shows: <code>{$ocrUtr}</code>\n\nPlease send correct screenshot or re-enter UTR.");return;}}
+    elseif(!$savedUtr&&$ocrUtr){$savedUtr=$ocrUtr;}
+    rbdTgSend($token,$cid,"✅ <b>Request Queued!</b>\n\nYour payment has been submitted for verification.\n".($savedUtr?"🔢 UTR: <code>{$savedUtr}</code>\n":'')."Admin will confirm shortly.");
+    rbdClearState($cid);rbdRlCompleted($cid);
+    $acid=trim($cfg['admin_chat_id']??'');
+    if($acid){tg('forwardMessage',['chat_id'=>$acid,'from_chat_id'=>$cid,'message_id'=>$msg['message_id']],$token);rbdTgSend($token,$acid,"✅ <b>Payment Verified</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($amount)."\n🔢 UTR: <code>{$savedUtr}</code>\n".($txnId?"🔖 Txn: <code>{$txnId}</code>\n":'')."🕐 ".date('d/m/Y H:i:s'));}
+    rbdLog("Payment verified — chat={$cid} utr={$savedUtr} txn={$txnId}",'success');
+}
+
+function rbdHandleUpdate($update,$cfg){
+    $token=trim($cfg['bot_token']??'');if(!$token)return;
+    if(isset($update['callback_query'])){
+        $cq=$update['callback_query'];$cid=$cq['message']['chat']['id']??'';$cbdata=$cq['data']??'';$cqId=$cq['id']??'';
+        tg('answerCallbackQuery',['callback_query_id'=>$cqId],$token);
+        if(str_starts_with($cbdata,'rbdamt_')){$amount=(int)substr($cbdata,7);rbdProcessAmount($token,$cid,$amount,$cfg);return;}
+        if(str_starts_with($cbdata,'rbdsubmitutr_')){$state=rbdGetState($cid);if($state){rbdTgSend($token,$cid,"🔢 <b>Step 1: Enter your UTR Number</b>\n\n<i>12-digit transaction reference from your bank app</i>");rbdSetState($cid,'awaiting_utr_text',$state['data']);}}
+        return;
+    }
+    $msg=$update['message']??$update['channel_post']??null;if(!$msg)return;
+    $cid=$msg['chat']['id']??'';$text=trim($msg['text']??'');$userName=$msg['from']['username']??$msg['from']['first_name']??'User';$photo=$msg['photo']??null;$doc=$msg['document']??null;if(!$cid)return;
+    $state=rbdGetState($cid);
+    if($state&&($photo||$doc)){$st=$state['state']??'';if(in_array($st,['awaiting_utr','awaiting_utr_text','awaiting_screenshot'])){rbdHandleScreenshotUtr($token,$cid,$msg,$state,$cfg);return;}if($st==='awaiting_withdrawal_qr'){$data=$state['data']??[];$wAmount=(float)($data['w_amount']??0);$acid=trim($cfg['admin_chat_id']??'');if($acid){tg('forwardMessage',['chat_id'=>$acid,'from_chat_id'=>$cid,'message_id'=>$msg['message_id']],$token);rbdTgSend($token,$acid,"💸 <b>Withdrawal Request</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($wAmount,2)."\n🕐 ".date('d/m/Y H:i:s'));}rbdLdAddWithdrawal($cid,$wAmount);rbdClearState($cid);rbdTgSend($token,$cid,"✅ <b>Withdrawal Request Accepted</b>\n\n💰 Amount: <b>₹".number_format($wAmount,2)."</b>\n\nContact ".RBD_WITHDRAWAL_CONTACT." for assistance.");return;}}
+    $cmd=strtolower(explode('@',explode(' ',$text)[0])[0]);
+    if($cmd==='/start'){$welcome=str_replace('\n',"\n",$cfg['welcome_msg']??"Welcome to Rebel B2W!");rbdTgSend($token,$cid,$welcome,['keyboard'=>[['💰 Deposit','💸 Withdraw'],['💳 Balance','❓ Help']],'resize_keyboard'=>true]);rbdClearState($cid);return;}
+    if($cmd==='/deposit'||$text==='💰 Deposit'){rbdHandleDeposit($token,$cid,$userName,$cfg);return;}
+    if($cmd==='/balance'||$text==='💳 Balance'){$user=rbdLdGetUser($cid);$bal=(float)($user['balance']??0);$deps=array_slice(array_reverse($user['deposits']??[]),0,5);$dl='';foreach($deps as $d){$t=date('d/m/Y',strtotime($d['time']));$dl.="\n✅ ₹".number_format($d['amount'])." — {$t}".($d['utr']?" (UTR: {$d['utr']})":"");}rbdTgSend($token,$cid,"💳 <b>Your Rebel B2W Balance</b>\n\n💰 Available: <b>₹".number_format($bal,2)."</b>\n\n".($dl?"<b>Recent Deposits:</b>".$dl:"<i>No approved deposits yet.</i>")."\n\n<i>Balance credited after admin approval.</i>");return;}
+    if($cmd==='/withdrawal'||$text==='💸 Withdraw'){$user=rbdLdGetUser($cid);$bal=(float)($user['balance']??0);if($bal<=0){rbdTgSend($token,$cid,"❌ <b>Insufficient Balance</b>\n\nYour balance is ₹0. Make a deposit first.");return;}rbdTgSend($token,$cid,"💸 <b>Withdrawal Request</b>\n\n💰 Your Balance: <b>₹".number_format($bal,2)."</b>\n\nEnter the amount to withdraw:");rbdSetState($cid,'awaiting_withdrawal_amount',['balance'=>$bal]);return;}
+    if($cmd==='/help'||$text==='❓ Help'){rbdTgSend($token,$cid,"❓ <b>Help</b>\n\n/Deposit — Make deposit\n/Withdrawal — Request withdrawal\n/Balance — Check balance\n/Start — Restart\n\nSupport: ".RBD_WITHDRAWAL_CONTACT);return;}
+    if(!$state){rbdTgSend($token,$cid,"👇 Use /Deposit to deposit funds.");return;}
+    switch($state['state']){
+        case 'awaiting_amount':$amount=(float)preg_replace('/[^0-9.]/','', $text);if($amount<=0){rbdTgSend($token,$cid,"❌ Enter a valid amount. Example: <code>1000</code>");return;}rbdProcessAmount($token,$cid,(int)$amount,$cfg);break;
+        case 'awaiting_utr':case 'awaiting_utr_text':$utr=trim(preg_replace('/[^a-zA-Z0-9]/','',$text));if(strlen($utr)<6){rbdTgSend($token,$cid,"❌ Enter a valid UTR / reference number.");return;}$d2=$state['data'];$d2['utr']=$utr;rbdTgSend($token,$cid,"✅ UTR noted: <code>{$utr}</code>\n\n📸 <b>Now send your payment screenshot</b> to confirm.");rbdSetState($cid,'awaiting_screenshot',$d2);break;
+        case 'awaiting_screenshot':rbdTgSend($token,$cid,"📸 Please send a <b>screenshot</b> of your payment.");break;
+        case 'awaiting_withdrawal_amount':$wAmount=(float)preg_replace('/[^0-9.]/','',$text);$bal2=(float)($state['data']['balance']??0);if($wAmount<=0){rbdTgSend($token,$cid,"❌ Enter a valid amount.");return;}if($wAmount>$bal2){rbdTgSend($token,$cid,"❌ Insufficient balance.\n\nAvailable: <b>₹".number_format($bal2,2)."</b>");return;}rbdTgSend($token,$cid,"📸 <b>Send your UPI QR Code</b>\n\nAmount: <b>₹".number_format($wAmount,2)."</b>\n\nSend a screenshot of your UPI QR code.");rbdSetState($cid,'awaiting_withdrawal_qr',['balance'=>$bal2,'w_amount'=>$wAmount]);break;
+        case 'awaiting_withdrawal_qr':rbdTgSend($token,$cid,"📸 Please send your <b>UPI QR code image</b>.");break;
+        default:rbdClearState($cid);rbdTgSend($token,$cid,"👇 /Deposit — Make deposit\n/Balance — Check balance");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ██╗     ██╗███╗   ██╗██╗  ██╗    ██████╗ ██╗   ██╗███╗   ██╗███╗   ██╗███████╗██████╗
+// ██║     ██║████╗  ██║██║ ██╔╝    ██╔══██╗██║   ██║████╗  ██║████╗  ██║██╔════╝██╔══██╗
+// ██║     ██║██╔██╗ ██║█████╔╝     ██████╔╝██║   ██║██╔██╗ ██║██╔██╗ ██║█████╗  ██████╔╝
+// ██║     ██║██║╚██╗██║██╔═██╗     ██╔══██╗██║   ██║██║╚██╗██║██║╚██╗██║██╔══╝  ██╔══██╗
+// ███████╗██║██║ ╚████║██║  ██╗    ██║  ██║╚██████╔╝██║ ╚████║██║ ╚████║███████╗██║  ██║
+//  ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝
+// Link Runner — Integrated Module
+// ═══════════════════════════════════════════════════════════════════════════
+define('LR_VERSION',     '1.2');
+define('LR_CONFIG_FILE', __DIR__ . '/lr_config.json');
+define('LR_LOG_FILE',    __DIR__ . '/lr_logs.json');
+define('LR_SS_DIR',      __DIR__ . '/lr_screenshots/');
+define('LR_CURL_TO',     30);
+define('LR_SESSION_FILE',__DIR__ . '/lr_sessions.json');
+if(!is_dir(LR_SS_DIR))@mkdir(LR_SS_DIR,0755,true);
+
+$_lrDefaultConfig=[
+    'run_secret'        => 'changeme123',
+    'bot_token'         => '',
+    'chat_id'           => '',
+    'send_prefix'       => '🔗 <b>Link Runner</b>\n\n',
+    'links'             => [],
+    'webhook_token'     => '',
+    'webhook_cmd'       => '/run',
+    // ── Python Aadhaar Bot config ──
+    'py_bot_token'      => '',
+    'py_uidai_proxy'    => '',
+    'py_fetch_cmd'      => '/fetch',
+    'py_cancel_cmd'     => '/cancel',
+    'py_refresh_cmd'    => '/refresh',
+    'py_start_msg'      => "👾 <b>Aadhaar Retrieve Bot</b> — Online ✅\n\n📌 <b>Command:</b>\n<code>/fetch &lt;mobile&gt; &lt;fullname&gt;</code>\n\nExample:\n<code>/fetch 9876543210 Ravi Kumar</code>",
+    'py_loading_steps'  => "🔐 Secure tunnel initialize ho raha hai...\n🛰️ UIDAI node se connect ho raha hai...\n🧬 Session payload inject ho raha hai...\n🔍 Biometric endpoint resolve ho raha hai...\n⚡ Sandbox bypass ho raha hai...\n🗝️ Identity matrix decrypt ho rahi hai...\n📋 Form fill ho raha hai...\n📸 Captcha capture ho raha hai...",
+    'py_otp_steps'      => "🔐 OTP token validate ho raha hai...\n🧬 Biometric hash cross-reference ho raha hai...\n📂 Encrypted Aadhaar file locate ho rahi hai...\n⬇️ Document decrypt aur package ho raha hai...\n✅ Document secured. Bhej raha hoon...",
+    'py_captcha_msg'    => "📸 <b>Captcha ready hai!</b>\n\nNeeche captcha image dekho aur <b>text reply karo.</b>\n<i>/refresh = naya captcha | /cancel = band karo</i>",
+    'py_otp_msg'        => "📲 <b>OTP bheja gaya!</b>\n📱 <code>{mobile}</code> pe OTP aaya hoga.\n\n🔢 <b>OTP reply karo:</b>\n<i>/cancel = band karo</i>",
+    'py_success_msg'    => "✅ <b>Aadhaar document ready!</b>\n🔒 <i>Yeh file sirf aapke liye hai. Safely store karo.</i>",
+    'py_cancel_msg'     => "❌ <b>Process cancel kar diya.</b>\nDobara shuru karne ke liye /fetch karo.",
+    'py_error_prefix'   => "❌ <b>Error:</b>",
+];
+function lrLoadConfig(){
+    global $_lrDefaultConfig;
+    if(!file_exists(LR_CONFIG_FILE))return$_lrDefaultConfig;
+    $l=json_decode(file_get_contents(LR_CONFIG_FILE),true);
+    return is_array($l)?array_merge($_lrDefaultConfig,$l):$_lrDefaultConfig;
+}
+function lrSaveConfig($cfg){file_put_contents(LR_CONFIG_FILE,json_encode($cfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function lrLog($text,$type='info'){$l=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];array_unshift($l,['time'=>date('c'),'text'=>$text,'type'=>$type]);if(count($l)>300)$l=array_slice($l,0,300);file_put_contents(LR_LOG_FILE,json_encode($l,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function lrTg($method,$params,$token){$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/'.$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>json_encode($params),CURLOPT_HTTPHEADER=>['Content-Type: application/json']]);$r=curl_exec($ch);curl_close($ch);return json_decode($r,true)?:[];}
+
+function lrSend($token,$chatId,$text){if(!$token||!$chatId||!trim($text))return false;$chunks=lrChunk($text,4000);$ok=true;foreach($chunks as $chunk){$r=lrTg('sendMessage',['chat_id'=>$chatId,'text'=>$chunk,'parse_mode'=>'HTML','disable_web_page_preview'=>true],$token);if(!($r['ok']??false))$ok=false;}return $ok;}
+function lrChunk($text,$maxLen=4000){$chunks=[];while(mb_strlen($text)>$maxLen){$pos=mb_strrpos(mb_substr($text,0,$maxLen),"\n");if($pos===false)$pos=$maxLen;$chunks[]=mb_substr($text,0,$pos);$text=mb_substr($text,$pos);}if(trim($text)!=='')$chunks[]=$text;return $chunks?:[''];}
+
+function lrFetch($url,$method='GET',$headers='',$body='',$timeout=30,$sslVerify=true){
+    $hdrs=[];if($headers){foreach(explode("\n",$headers) as $h){$h=trim($h);if($h&&strpos($h,':')!==false)$hdrs[]=$h;}}
+    if(empty($hdrs))$hdrs=['User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36','Accept: application/json,text/html,*/*'];
+    $ch=curl_init();$o=[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>$sslVerify,CURLOPT_SSL_VERIFYHOST=>$sslVerify?2:0,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_HTTPHEADER=>$hdrs];
+    $m=strtoupper($method);if($m==='POST'){$o[CURLOPT_POST]=true;$o[CURLOPT_POSTFIELDS]=$body;}elseif($m!=='GET'){$o[CURLOPT_CUSTOMREQUEST]=$m;if($body)$o[CURLOPT_POSTFIELDS]=$body;}
+    curl_setopt_array($ch,$o);$res=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+    return['code'=>$code,'body'=>$res?:'','error'=>$err];
+}
+
+function lrJsonPath($data,$path){if(empty($path))return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;foreach(explode('.',$path) as $k){if(is_array($data)&&isset($data[$k]))$data=$data[$k];elseif(is_array($data)&&is_numeric($k)&&isset($data[(int)$k]))$data=$data[(int)$k];else return null;}return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;}
+function lrFlatten($data,$prefix='',$map=[]){if(!is_array($data)){if($prefix!=='')$map[$prefix]=(string)$data;return $map;}foreach($data as $k=>$v){$full=$prefix!==''?$prefix.'.'.$k:(string)$k;if(is_array($v))$map=lrFlatten($v,$full,$map);else{$map[$full]=(string)$v;if(!isset($map[$k]))$map[$k]=(string)$v;}}return $map;}
+function lrReplace($text,$vars){foreach($vars as $k=>$v){$text=str_replace('{'.$k.'}',(string)$v,$text);}return $text;}
+
+// ─── Auto-detect form fields from HTML page ──────────────────────────────
+function lrDetectFormFields($pageUrl,$timeout=20){
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$pageUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',CURLOPT_HTTPHEADER=>['Accept-Language: en-US,en;q=0.9']]);
+    $html=curl_exec($ch);curl_close($ch);if(!$html)return[];
+    $fields=[];$skip=['hidden','submit','button','reset','image','file','checkbox','radio'];
+    preg_match_all('/<input([^>]*)>/i',$html,$inputs);
+    foreach($inputs[1] as $attrs){$type='';$name='';$ph='';$label='';if(preg_match('/type\s*=\s*["\']?([a-zA-Z]+)/i',$attrs,$m))$type=strtolower($m[1]);if(in_array($type,$skip))continue;if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/placeholder\s*=\s*["\']([^"\']+)/i',$attrs,$m))$ph=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$ph?:$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<textarea([^>]*)>/i',$html,$textareas);
+    foreach($textareas[1] as $attrs){$name='';$ph='';$label='';if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/placeholder\s*=\s*["\']([^"\']+)/i',$attrs,$m))$ph=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$ph?:$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<select([^>]*)>/i',$html,$selects);
+    foreach($selects[1] as $attrs){$name='';$label='';if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<label[^>]*for\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)<\/label>/is',$html,$labels);
+    foreach($labels[1] as $i=>$forId){$lt=trim(strip_tags($labels[2][$i]));if(!$lt)continue;preg_match_all('/<input[^>]*id\s*=\s*["\']'.preg_quote($forId,'/').'["\'][^>]*name\s*=\s*["\']([^"\']+)/i',$html,$nm);if(!empty($nm[1][0]))$fields[$nm[1][0]]=$lt;}
+    return $fields;
+}
+
+// ─── Form-fill session helpers ───────────────────────────────────────────
+function lrSessionLoad(){if(!file_exists(LR_SESSION_FILE))return[];return json_decode(file_get_contents(LR_SESSION_FILE),true)?:[];}
+function lrSessionSave($s){file_put_contents(LR_SESSION_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function lrSessionGet($cid){$a=lrSessionLoad();return $a[(string)$cid]??null;}
+function lrSessionSet($cid,$data){$a=lrSessionLoad();$a[(string)$cid]=$data;lrSessionSave($a);}
+function lrSessionDel($cid){$a=lrSessionLoad();unset($a[(string)$cid]);lrSessionSave($a);}
+
+function lrFetchScreenshotBytes($url,$timeout=30){
+    $thumbUrl='https://image.thum.io/get/width/1280/crop/900/png/'.urlencode($url);
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$thumbUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (compatible; LinkRunner/1.1)']);
+    $data=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$ct=curl_getinfo($ch,CURLINFO_CONTENT_TYPE);curl_close($ch);
+    if($code===200&&$data&&str_contains((string)$ct,'image'))return['bytes'=>$data,'source'=>'thum.io'];
+    $ml='https://api.microlink.io/?url='.urlencode($url).'&screenshot=true&meta=false&embed=screenshot.url';
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$ml,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (compatible; LinkRunner/1.1)']);
+    $mlData=json_decode(curl_exec($ch),true);curl_close($ch);
+    $ssUrl=$mlData['data']['screenshot']['url']??($mlData['data']['screenshot']??null);
+    if($ssUrl&&str_starts_with($ssUrl,'http')){$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$ssUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true]);$imgData=curl_exec($ch);$imgCode=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if($imgCode===200&&$imgData)return['bytes'=>$imgData,'source'=>'microlink'];}
+    return null;
+}
+
+function lrTakeScreenshot($url,$token,$chatId,$caption,$timeout=30){
+    if(!$token||!$chatId)return false;
+    $result=lrFetchScreenshotBytes($url,$timeout);if(!$result)return false;
+    $ssFile=LR_SS_DIR.'ss_'.md5($url.microtime()).'.png';file_put_contents($ssFile,$result['bytes']);
+    if(!file_exists($ssFile)||filesize($ssFile)<500){@unlink($ssFile);return false;}
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>40,CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$caption."\n<i>via ".($result['source']??'API')."</i>",'parse_mode'=>'HTML','photo'=>new CURLFile($ssFile,'image/png','screenshot.png')]]);
+    $r=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($ssFile);
+    if(empty($r['ok'])){$r2=lrTg('sendPhoto',['chat_id'=>$chatId,'photo'=>'https://image.thum.io/get/width/1280/crop/900/png/'.urlencode($url),'caption'=>$caption,'parse_mode'=>'HTML'],$token);return!empty($r2['ok']);}
+    return!empty($r['ok']);
+}
+
+function lrRunAll($cfg,$extraVars=[]){
+    $results=[];$links=$cfg['links']??[];
+    foreach($links as $link){
+        if(empty($link['enabled']))continue;
+        $id=$link['id']??uniqid('lr_');$name=$link['name']??$id;$url=trim($link['url']??'');if(!$url)continue;
+        $vars=array_merge(['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')],$extraVars);
+        $url=lrReplace($url,$vars);$headers=lrReplace($link['headers']??'',$vars);$body2=lrReplace($link['body']??'',$vars);
+        $timeout=max(5,min(120,(int)($link['timeout']??30)));$ssl=!isset($link['ssl_verify'])||(bool)$link['ssl_verify'];
+        $chatId2=trim($link['chat_id']??'')?:trim($cfg['chat_id']??'');$token2=trim($cfg['bot_token']??'');
+        $useScreenshot=!empty($link['screenshot_mode']);
+        if($useScreenshot){
+            $ssCaption=lrReplace($link['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}',array_merge($vars,['name'=>htmlspecialchars($name,ENT_NOQUOTES,'UTF-8'),'url'=>htmlspecialchars($url,ENT_NOQUOTES,'UTF-8')]));
+            $sent=false;if($token2&&$chatId2)$sent=lrTakeScreenshot($url,$token2,$chatId2,$ssCaption,$timeout);
+            $results[]=['id'=>$id,'name'=>$name,'url'=>$url,'code'=>0,'failed'=>!$sent,'extracted'=>$sent?'[screenshot sent]':'[screenshot failed]','sent'=>$sent,'msg'=>$ssCaption,'mode'=>'screenshot'];
+            lrLog(($sent?"SS OK [{$id}]":"SS FAIL [{$id}]")." → ".$name,$sent?'success':'error');continue;
+        }
+        $result=lrFetch($url,$link['method']??'GET',$headers,$body2,$timeout,$ssl);$rawBody=$result['body']??'';$code=$result['code']??0;
+        $extracted=null;$respPath=trim($link['response_path']??'');$respData=json_decode($rawBody,true);
+        if($respPath!==''&&$respData!==null)$extracted=lrJsonPath($respData,$respPath);
+        if($extracted===null&&is_array($respData)){foreach(['result','response','text','content','answer','message','output','data','value'] as $fk){if(isset($respData[$fk])&&is_string($respData[$fk])&&trim($respData[$fk])!==''){$extracted=$respData[$fk];break;}}}
+        if($extracted===null)$extracted=$rawBody;
+        $failed=($code>=400||$extracted===null||$extracted==='');
+        $replyTpl=$link['reply_template']??'📌 <b>{name}</b>\n{response}';
+        $allVars=array_merge($vars,['name'=>htmlspecialchars($name,ENT_NOQUOTES,'UTF-8'),'url'=>htmlspecialchars($url,ENT_NOQUOTES,'UTF-8'),'http_code'=>$code,'response'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'result'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'curl_response'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'raw'=>htmlspecialchars($rawBody,ENT_NOQUOTES,'UTF-8'),'status'=>$failed?'❌ FAILED':'✅ OK','error'=>htmlspecialchars($result['error']??'',ENT_NOQUOTES,'UTF-8')]);
+        if(is_array($respData)){$flat=lrFlatten($respData);uksort($flat,fn($a,$b)=>strlen($b)-strlen($a));foreach($flat as $fk=>$fv)$allVars[$fk]=htmlspecialchars((string)$fv,ENT_NOQUOTES,'UTF-8');}
+        $msgText=lrReplace($replyTpl,$allVars);$sent=false;
+        if(!$failed&&$token2&&$chatId2){$prefix=str_replace('\n',"\n",$cfg['send_prefix']??'');$sent=lrSend($token2,$chatId2,$prefix.$msgText);}
+        elseif($failed&&!empty($link['send_on_error'])&&$token2&&$chatId2){$errTpl=$link['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>';lrSend($token2,$chatId2,lrReplace($errTpl,$allVars));}
+        $results[]=['id'=>$id,'name'=>$name,'url'=>$url,'code'=>$code,'failed'=>$failed,'extracted'=>$extracted,'sent'=>$sent,'msg'=>$msgText,'mode'=>'curl'];
+        lrLog(($failed?"FAIL [{$id}] HTTP {$code}":"OK [{$id}] HTTP {$code}")." → ".$name,$failed?'error':'success');
+    }
+    return $results;
+}
+
 function sendSticker($chatId,$stickerId,$token){
     return tg('sendSticker',['chat_id'=>$chatId,'sticker'=>$stickerId],$token);
 }
@@ -3594,6 +3981,177 @@ function handleLaFormCapture($botId,$chatId,$u,&$db,$s,$msgText,$token){
     return true;
 }
 
+// ─── Python Aadhaar Bot Webhook ──────────────────────────────────────────
+if(isset($_GET['py_webhook'])){
+    $abCfg=lrLoadConfig();
+    $abTok=trim($abCfg['py_bot_token']??'');
+    $abUpdate=json_decode(file_get_contents('php://input'),true);
+    if(!is_array($abUpdate)){http_response_code(200);exit;}
+    $abMsg=$abUpdate['message']??$abUpdate['channel_post']??null;
+    if($abMsg&&$abTok){
+        $abChatId=(string)($abMsg['chat']['id']??'');
+        $abText=trim($abMsg['text']??'');
+        $abCmd=strtolower(explode(' ',$abText)[0]??'');
+        $abFetchCmd=trim($abCfg['py_fetch_cmd']??'/fetch');
+        $abCancelCmd=trim($abCfg['py_cancel_cmd']??'/cancel');
+        $abRefreshCmd=trim($abCfg['py_refresh_cmd']??'/refresh');
+
+        // ── Active session check ─────────────────────────────
+        $abSession=lrSessionGet($abChatId);
+        if($abSession){
+            if($abCmd===$abCancelCmd||$abCmd==='/cancel'){
+                lrSessionDel($abChatId);
+                $cancelMsg=str_replace('\n',"\n",$abCfg['py_cancel_msg']??'❌ Process cancel kar diya.');
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$cancelMsg,'parse_mode'=>'HTML'],$abTok);
+                lrLog("PY-BOT: session cancelled — chat={$abChatId}",'info');
+                http_response_code(200);exit;
+            }
+            // Process session answer
+            $abStep=$abSession['step']??0;
+            $abFields=$abSession['fields']??[];
+            if(isset($abFields[$abStep])){
+                $abSession['answers'][$abFields[$abStep]]=$abText;
+                $abSession['step']=$abStep+1;
+                lrSessionSet($abChatId,$abSession);
+                if($abSession['step']<count($abFields)){
+                    $abNextLabel=$abSession['field_labels'][$abSession['step']]??$abFields[$abSession['step']];
+                    $abTotal=count($abFields);$abCurr=$abSession['step']+1;
+                    lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>"✏️ <b>".htmlspecialchars($abNextLabel,ENT_QUOTES)."</b> dalo: <i>({$abCurr}/{$abTotal})</i>\n<i>(ya {$abCancelCmd} likho)</i>",'parse_mode'=>'HTML'],$abTok);
+                    http_response_code(200);exit;
+                }
+                // All fields done — submit
+                lrSessionDel($abChatId);
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>str_replace('\n',"\n",$abCfg['py_success_msg']??'✅ Done!'),'parse_mode'=>'HTML'],$abTok);
+                lrLog("PY-BOT: form complete — chat={$abChatId}",'success');
+            }
+            http_response_code(200);exit;
+        }
+
+        // ── /start ───────────────────────────────────────────
+        if($abCmd==='/start'){
+            $abStartMsg=str_replace('\n',"\n",$abCfg['py_start_msg']??'👾 Aadhaar Bot online!');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStartMsg,'parse_mode'=>'HTML'],$abTok);
+            lrLog("PY-BOT: /start — chat={$abChatId}",'info');
+        }
+        // ── /fetch command ────────────────────────────────────
+        elseif($abCmd===$abFetchCmd||str_starts_with(strtolower($abText),strtolower($abFetchCmd).' ')){
+            $abLoadingRaw=trim($abCfg['py_loading_steps']??'');
+            $abSteps=array_filter(array_map('trim',explode("\n",$abLoadingRaw)),fn($s)=>$s!=='');
+            foreach($abSteps as $abStep2){
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStep2,'parse_mode'=>'HTML'],$abTok);
+                usleep(800000); // 0.8s delay between steps
+            }
+            // After loading — show captcha message
+            $abCapMsg=str_replace('\n',"\n",$abCfg['py_captcha_msg']??'📸 Captcha enter karo:');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abCapMsg,'parse_mode'=>'HTML'],$abTok);
+            // Start a session for captcha → OTP flow
+            lrSessionSet($abChatId,['type'=>'adhar_flow','step'=>0,'fields'=>['captcha','otp'],'field_labels'=>['📸 Captcha','🔢 OTP'],'answers'=>[],'link_id'=>'adhar_fetch']);
+            lrLog("PY-BOT: /fetch started — chat={$abChatId}",'info');
+        }
+        // ── Unknown ───────────────────────────────────────────
+        else{
+            $abStartMsg=str_replace('\n',"\n",$abCfg['py_start_msg']??'👾 Aadhaar Bot online!');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStartMsg,'parse_mode'=>'HTML'],$abTok);
+        }
+    }
+    http_response_code(200);exit;
+}
+
+// ─── RBD (Deposit Bot) Webhook ───────────────────────────────────────────
+if(isset($_GET['rbd_webhook'])){
+    $rbdCfg=rbdLoadConfig();
+    $rbdUpdate=json_decode(file_get_contents('php://input'),true);
+    if(is_array($rbdUpdate))rbdHandleUpdate($rbdUpdate,$rbdCfg);
+    http_response_code(200);exit;
+}
+
+// ─── Link Runner Webhook ─────────────────────────────────────────────────
+if(isset($_GET['lr_webhook'])){
+    $lrCfg=lrLoadConfig();$lrWToken=trim($lrCfg['webhook_token']?:$lrCfg['bot_token']);
+    $lrUpdate=json_decode(file_get_contents('php://input'),true);
+    if(!is_array($lrUpdate)){http_response_code(200);exit;}
+    $lrMsg=$lrUpdate['message']??$lrUpdate['channel_post']??null;
+    if($lrMsg){
+        $lrText=trim($lrMsg['text']??'');
+        $lrChatId=(string)($lrMsg['chat']['id']??'');
+        $lrCmd=trim($lrCfg['webhook_cmd']??'/run');
+
+        // ── Active form-fill session check ──────────────────
+        $lrSession=lrSessionGet($lrChatId);
+        if($lrSession){
+            if(strtolower($lrText)==='/cancel'){
+                lrSessionDel($lrChatId);
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'❌ Form fill cancelled.','parse_mode'=>'HTML'],$lrWToken);
+                http_response_code(200);exit;
+            }
+            $lrSession['answers'][$lrSession['fields'][$lrSession['step']]]=$lrText;
+            $lrSession['step']++;
+            lrSessionSet($lrChatId,$lrSession);
+            if($lrSession['step']<count($lrSession['fields'])){
+                $lrNextLabel=$lrSession['field_labels'][$lrSession['step']]??$lrSession['fields'][$lrSession['step']];
+                $lrTotal=count($lrSession['fields']);$lrCurr=$lrSession['step']+1;
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✏️ <b>".htmlspecialchars($lrNextLabel,ENT_QUOTES)."</b> dalo: <i>({$lrCurr}/{$lrTotal})</i>\n<i>(ya /cancel)</i>",'parse_mode'=>'HTML'],$lrWToken);
+                http_response_code(200);exit;
+            }
+            // All fields collected — find link and submit
+            $lrFormLink=null;foreach($lrCfg['links'] as $lk){if(($lk['id']??'')===$lrSession['link_id']){$lrFormLink=$lk;break;}}
+            if(!$lrFormLink){lrSessionDel($lrChatId);lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⚠️ Link config nahi mila.'],$lrWToken);http_response_code(200);exit;}
+            $lrVars=array_merge(['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')],$lrSession['answers']);
+            $lrFillUrl=lrReplace(trim($lrFormLink['url']??''),$lrVars);$lrFillH=lrReplace(trim($lrFormLink['headers']??''),$lrVars);$lrFillB=lrReplace(trim($lrFormLink['body']??''),$lrVars);
+            if(empty($lrFillB)&&strtoupper($lrFormLink['method']??'GET')==='POST'){$lrFillB=http_build_query($lrSession['answers']);if(empty($lrFillH))$lrFillH='Content-Type: application/x-www-form-urlencoded';}
+            $lrTo=max(5,min(120,(int)($lrFormLink['timeout']??30)));$lrSSL=!isset($lrFormLink['ssl_verify'])||(bool)$lrFormLink['ssl_verify'];
+            $lrFillRes=lrFetch($lrFillUrl,strtoupper($lrFormLink['method']??'POST'),$lrFillH,$lrFillB,$lrTo,$lrSSL);
+            lrSessionDel($lrChatId);
+            $lrOk2=$lrFillRes['code']>=200&&$lrFillRes['code']<400;
+            $lrSummary=$lrOk2?"✅ <b>Form submit ho gaya!</b>\nHTTP: <code>{$lrFillRes['code']}</code>":"⚠️ <b>Submit fail hua.</b>\nHTTP: <code>{$lrFillRes['code']}</code>\n<pre>".htmlspecialchars(mb_substr($lrFillRes['body']??'',0,300))."</pre>";
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>$lrSummary,'parse_mode'=>'HTML'],$lrWToken);
+            lrLog("Form fill [{$lrSession['link_id']}] → HTTP {$lrFillRes['code']}",$lrOk2?'success':'error');
+            http_response_code(200);exit;
+        }
+
+        // ── /fill command ────────────────────────────────────
+        if(str_starts_with(strtolower($lrText),'/fill')){
+            $lrParts=explode(' ',$lrText,2);$lrSearch=strtolower(trim($lrParts[1]??''));$lrFound=null;
+            foreach($lrCfg['links'] as $lk){if(!empty($lk['form_fill_mode'])&&(strtolower($lk['name']??'')===$lrSearch||strtolower($lk['id']??'')===$lrSearch||$lrSearch==='')){$lrFound=$lk;break;}}
+            if(!$lrFound){
+                $lrList=array_filter($lrCfg['links'],fn($l)=>!empty($l['form_fill_mode']));
+                if(empty($lrList))lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⚠️ Koi form-fill link configure nahi hai.','parse_mode'=>'HTML'],$lrWToken);
+                else{$lrNames=implode("\n",array_map(fn($l)=>"• <code>".htmlspecialchars($l['name'])."</code>",$lrList));lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"📋 Available forms:\n{$lrNames}\n\n/fill &lt;name&gt; likho",'parse_mode'=>'HTML'],$lrWToken);}
+                http_response_code(200);exit;
+            }
+            $lrManFields=array_values(array_filter(array_map('trim',explode(',',$lrFound['form_fields']??'')),fn($f)=>$f!==''));
+            if(!empty($lrManFields)){$lrFieldMap=[];foreach($lrManFields as $f)$lrFieldMap[$f]=$f;}
+            else{
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'🔍 Site ke form fields detect ho rahe hain...','parse_mode'=>'HTML'],$lrWToken);
+                $lrPageUrl=lrReplace(trim($lrFound['url']??''),['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')]);
+                $lrFieldMap=lrDetectFormFields($lrPageUrl,20);
+                if(empty($lrFieldMap)){lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"⚠️ Auto-detect fail hua.\nAdmin panel mein <b>Form Fields</b> manually likho.",'parse_mode'=>'HTML'],$lrWToken);http_response_code(200);exit;}
+            }
+            $lrFN=array_keys($lrFieldMap);$lrFL=array_values($lrFieldMap);
+            lrSessionSet($lrChatId,['link_id'=>$lrFound['id'],'fields'=>$lrFN,'field_labels'=>$lrFL,'step'=>0,'answers'=>[]]);
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"📝 <b>".htmlspecialchars($lrFound['name'])."</b> form shuru!\n\n✏️ <b>".htmlspecialchars($lrFL[0])."</b> dalo:\n<i>(ya /cancel)</i>",'parse_mode'=>'HTML'],$lrWToken);
+            http_response_code(200);exit;
+        }
+
+        // ── Normal /run command ──────────────────────────────
+        if(str_starts_with(strtolower($lrText),strtolower($lrCmd))){
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⏳ Running links...','parse_mode'=>'HTML'],$lrWToken);
+            $lrResults=lrRunAll($lrCfg,['tg_chat'=>$lrChatId]);
+            $lrOk=count(array_filter($lrResults,fn($r)=>!$r['failed']));$lrTot=count($lrResults);
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✅ <b>Link Runner Done!</b>\n\n📊 Results: <code>{$lrOk}/{$lrTot}</code> success",'parse_mode'=>'HTML'],$lrWToken);
+        }
+    }
+    http_response_code(200);exit;
+}
+
+// ─── Link Runner URL trigger (?lr_run=1&secret=X) ────────────────────────
+if(isset($_GET['lr_run'])){
+    $lrCfg2=lrLoadConfig();$lrSecret=$_GET['secret']??'';
+    if($lrSecret!==$lrCfg2['run_secret']){http_response_code(403);echo json_encode(['ok'=>false,'error'=>'Invalid secret']);exit;}
+    header('Content-Type: application/json');$lrRes2=lrRunAll($lrCfg2);
+    echo json_encode(['ok'=>true,'results'=>$lrRes2,'total'=>count($lrRes2),'success'=>count(array_filter($lrRes2,fn($r)=>!$r['failed']))]);exit;
+}
+
 session_start();
 function san($x){return htmlspecialchars(strip_tags(trim($x)),ENT_QUOTES,'UTF-8');}
 function jout($d){header('Content-Type: application/json');echo json_encode($d);exit;}
@@ -4309,6 +4867,125 @@ if($page==='api'){
             if($extracted===null)$extracted=$rawResp;
             jout(['ok'=>true,'http_code'=>$testResult['code'],'raw_body'=>mb_substr($rawResp,0,2000),'extracted'=>mb_substr((string)$extracted,0,1000),'error'=>$testResult['error']??'']);break;
 
+        // ─── RBD (Deposit Bot) API Actions ──────────────────────────
+        case 'rbd_get_config':
+            $rbdC=rbdLoadConfig();unset($rbdC['admin_pass']);jout(['ok'=>true,'data'=>$rbdC]);break;
+        case 'rbd_save_config':
+            $rbdC=rbdLoadConfig();foreach(['bot_token','admin_chat_id','rb_phone','rb_password','rb_branch','rb_bank_id','welcome_msg','deposit_thanks'] as $rk){if(isset($body[$rk]))$rbdC[$rk]=trim($body[$rk]);}foreach(['min_deposit','max_deposit'] as $rk){if(isset($body[$rk]))$rbdC[$rk]=(int)$body[$rk];}if(!empty($body['new_pass'])&&strlen(trim($body['new_pass']))>=4)$rbdC['admin_pass']=trim($body['new_pass']);rbdSaveConfig($rbdC);rbdLog('Config saved','info');jout(['ok'=>true]);break;
+        case 'rbd_set_webhook':
+            $rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $rbdPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';$rbdWUrl=$rbdPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?rbd_webhook=1';
+            $rbdR=tg('setWebhook',['url'=>$rbdWUrl,'allowed_updates'=>['message','channel_post','callback_query']],$rbdTok);jout(['ok'=>$rbdR['ok']??false,'webhook_url'=>$rbdWUrl,'tg'=>$rbdR]);break;
+        case 'rbd_remove_webhook':
+            $rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $rbdR=tg('deleteWebhook',[],$rbdTok);jout(['ok'=>$rbdR['ok']??false]);break;
+        case 'rbd_test_rb_login':
+            $rbdC=rbdLoadConfig();@unlink(RBD_COOKIE_DIR.'admin.txt');$rbdU=rbdAdminLogin($rbdC);jout($rbdU?['ok'=>true,'user'=>$rbdU]:['ok'=>false,'error'=>'Login failed']);break;
+        case 'rbd_test_bank':
+            $rbdC=rbdLoadConfig();$rbdBk=rbdGetBankDetails($rbdC,500);jout(['ok'=>(bool)$rbdBk,'bank'=>$rbdBk,'source'=>'powerdreams.co/api/online/request/fetchAvailablePeer']);break;
+        case 'rbd_send_test':
+            $rbdC=rbdLoadConfig();$rbdCid=trim($body['chat_id']??$rbdC['admin_chat_id']??'');$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdCid||!$rbdTok)jout(['ok'=>false,'error'=>'Token/chat_id missing']);$rbdR=rbdTgSend($rbdTok,$rbdCid,"✅ <b>Rebel B2W</b> is working!\n\n".date('d/m/Y H:i:s'));jout(['ok'=>$rbdR['ok']??false]);break;
+        case 'rbd_approve_deposit':
+            $rbdCid=trim($body['chat_id']??'');$rbdAmt=(float)($body['amount']??0);$rbdUtr=trim($body['utr']??'');$rbdTxn=trim($body['txn_id']??'');if(!$rbdCid||$rbdAmt<=0)jout(['ok'=>false,'error'=>'chat_id and amount required']);rbdLdAddDeposit($rbdCid,$rbdAmt,$rbdUtr,$rbdTxn);$rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if($rbdTok)rbdTgSend($rbdTok,$rbdCid,"✅ <b>Deposit Approved!</b>\n\n💰 ₹".number_format($rbdAmt,2)." credited.\n".($rbdUtr?"🔢 UTR: <code>{$rbdUtr}</code>\n":"")."\nUse /Balance to check balance.");rbdLog("Deposit approved — chat={$rbdCid} amount={$rbdAmt}",'success');jout(['ok'=>true,'user'=>rbdLdGetUser($rbdCid)]);break;
+        case 'rbd_get_ledger':
+            $rbdLd=rbdLdLoad();jout(['ok'=>true,'ledger'=>$rbdLd,'total_users'=>count($rbdLd)]);break;
+        case 'rbd_get_blocked':
+            $rbdRl=rbdRlLoad();$rbdNow=time();$rbdBl=[];foreach($rbdRl as $rbdCk=>$rbdRec){if(!empty($rbdRec['blocked_until'])&&$rbdRec['blocked_until']>$rbdNow)$rbdBl[$rbdCk]=['blocked_until'=>$rbdRec['blocked_until'],'remaining_mins'=>ceil(($rbdRec['blocked_until']-$rbdNow)/60),'incomplete'=>$rbdRec['incomplete']??0];}jout(['ok'=>true,'blocked'=>$rbdBl,'total'=>count($rbdBl)]);break;
+        case 'rbd_unblock_user':
+            $rbdCid=trim($body['chat_id']??'');if(!$rbdCid)jout(['ok'=>false,'error'=>'chat_id required']);rbdRlCompleted($rbdCid);jout(['ok'=>true,'msg'=>"User {$rbdCid} unblocked"]);break;
+        case 'rbd_get_logs':
+            $rbdLogs=file_exists(RBD_LOG_FILE)?(json_decode(file_get_contents(RBD_LOG_FILE),true)?:[]):[];jout(['ok'=>true,'data'=>array_slice($rbdLogs,0,150)]);break;
+        case 'rbd_clear_logs':
+            file_put_contents(RBD_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
+        // ─── Link Runner API Actions ─────────────────────────────────
+        case 'lr_get_config':
+            $lrC=lrLoadConfig();unset($lrC['admin_pass']);jout(['ok'=>true,'data'=>$lrC]);break;
+        case 'lr_save_config':
+            $lrC=lrLoadConfig();foreach(['bot_token','chat_id','send_prefix','run_secret','webhook_token','webhook_cmd'] as $lk){if(isset($body[$lk]))$lrC[$lk]=trim($body[$lk]);}if(!empty($body['new_pass'])&&strlen(trim($body['new_pass']))>=4)$lrC['admin_pass']=trim($body['new_pass']);lrSaveConfig($lrC);lrLog('Config saved','info');jout(['ok'=>true]);break;
+        case 'lr_save_links':
+            $lrC=lrLoadConfig();$lrLinks=[];foreach($body['links']??[] as $lk){$lrU=trim($lk['url']??'');if(!$lrU)continue;$lrLinks[]=['id'=>preg_replace('/[^a-zA-Z0-9_]/','_',$lk['id']??uniqid('l_')),'name'=>trim($lk['name']??'Link'),'enabled'=>(bool)($lk['enabled']??true),'url'=>$lrU,'method'=>strtoupper(trim($lk['method']??'GET')),'headers'=>trim($lk['headers']??''),'body'=>trim($lk['body']??''),'timeout'=>max(5,min(120,(int)($lk['timeout']??30))),'ssl_verify'=>!isset($lk['ssl_verify'])||(bool)$lk['ssl_verify'],'response_path'=>trim($lk['response_path']??''),'reply_template'=>trim($lk['reply_template']??'📌 <b>{name}</b>\n\n{response}'),'error_message'=>trim($lk['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>'),'send_on_error'=>(bool)($lk['send_on_error']??false),'chat_id'=>trim($lk['chat_id']??''),'screenshot_mode'=>(bool)($lk['screenshot_mode']??false),'screenshot_caption'=>trim($lk['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}'),'form_fill_mode'=>(bool)($lk['form_fill_mode']??false),'form_fields'=>trim($lk['form_fields']??'')];}$lrC['links']=$lrLinks;lrSaveConfig($lrC);lrLog('Links saved — '.count($lrLinks).' rule(s)','info');jout(['ok'=>true,'count'=>count($lrLinks)]);break;
+        case 'lr_run_now':
+            $lrC=lrLoadConfig();$lrRes=lrRunAll($lrC);lrLog('Manual run — '.count($lrRes).' link(s)','info');jout(['ok'=>true,'results'=>$lrRes,'success'=>count(array_filter($lrRes,fn($r)=>!$r['failed']))]);break;
+        case 'lr_run_single':
+            $lrC=lrLoadConfig();$lrLinkId=trim($body['link_id']??'');$lrSingle=null;foreach($lrC['links'] as $lk){if(($lk['id']??'')===$lrLinkId){$lrSingle=$lk;break;}}if(!$lrSingle)jout(['ok'=>false,'error'=>'Link not found']);$lrTmpC=$lrC;$lrTmpC['links']=[$lrSingle];$lrRes=lrRunAll($lrTmpC);jout(['ok'=>true,'result'=>$lrRes[0]??null]);break;
+        case 'lr_test_link':
+            $lrU=trim($body['url']??'');$lrM=strtoupper(trim($body['method']??'GET'));$lrH=trim($body['headers']??'');$lrB=trim($body['body']??'');$lrTo=max(5,min(60,(int)($body['timeout']??15)));if(!$lrU)jout(['ok'=>false,'error'=>'URL required']);$lrR=lrFetch($lrU,$lrM,$lrH,$lrB,$lrTo);jout(['ok'=>true,'code'=>$lrR['code'],'body'=>mb_substr($lrR['body'],0,2000),'error'=>$lrR['error']]);break;
+        case 'lr_set_webhook':
+            $lrC=lrLoadConfig();$lrTok=trim($lrC['webhook_token']?:$lrC['bot_token']);if(!$lrTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $lrPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';$lrWUrl=$lrPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?lr_webhook=1';
+            $lrR=lrTg('setWebhook',['url'=>$lrWUrl,'allowed_updates'=>['message','channel_post']],$lrTok);jout(['ok'=>$lrR['ok']??false,'webhook_url'=>$lrWUrl,'tg'=>$lrR]);break;
+        case 'lr_remove_webhook':
+            $lrC=lrLoadConfig();$lrTok=trim($lrC['webhook_token']?:$lrC['bot_token']);if(!$lrTok)jout(['ok'=>false,'error'=>'Bot token not set']);$lrR=lrTg('deleteWebhook',[],$lrTok);jout(['ok'=>$lrR['ok']??false]);break;
+        case 'lr_get_logs':
+            $lrLogs=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];jout(['ok'=>true,'data'=>array_slice($lrLogs,0,100)]);break;
+        case 'lr_clear_logs':
+            file_put_contents(LR_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
+        case 'lr_get_py_config':
+            $lrC2=lrLoadConfig();
+            $lrPyKeys=['py_bot_token','py_uidai_proxy','py_fetch_cmd','py_cancel_cmd','py_refresh_cmd','py_start_msg','py_loading_steps','py_otp_steps','py_captcha_msg','py_otp_msg','py_success_msg','py_cancel_msg','py_error_prefix'];
+            $lrPyOut=[];foreach($lrPyKeys as $k)$lrPyOut[$k]=$lrC2[$k]??'';
+            jout(['ok'=>true,'data'=>$lrPyOut]);break;
+
+        case 'lr_save_py_config':
+            $lrC2=lrLoadConfig();
+            $lrPyKeys=['py_bot_token','py_uidai_proxy','py_fetch_cmd','py_cancel_cmd','py_refresh_cmd','py_start_msg','py_loading_steps','py_otp_steps','py_captcha_msg','py_otp_msg','py_success_msg','py_cancel_msg','py_error_prefix'];
+            foreach($lrPyKeys as $k){if(isset($body[$k]))$lrC2[$k]=$body[$k];}
+            lrSaveConfig($lrC2);
+            $lrBotCfg=[];foreach($lrPyKeys as $k)$lrBotCfg[$k]=$lrC2[$k]??'';
+            file_put_contents(__DIR__.'/bot_config.json',json_encode($lrBotCfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);
+            lrLog('Python Aadhaar bot config saved','info');jout(['ok'=>true]);break;
+
+        // ─── Aadhaar Bot Testing & Monitoring Actions ────────
+        case 'ab_set_webhook':
+            $abC=lrLoadConfig();$abTok=trim($body['token']??$abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set — pehle config save karo']);
+            $abPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';
+            $abWUrl=$abPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?py_webhook=1';
+            $abR=lrTg('setWebhook',['url'=>$abWUrl,'allowed_updates'=>['message','channel_post','callback_query']],$abTok);
+            lrLog('Aadhaar bot webhook '.($abR['ok']??false?'set':'failed').': '.$abWUrl,'info');
+            jout(['ok'=>$abR['ok']??false,'webhook_url'=>$abWUrl,'tg'=>$abR]);break;
+
+        case 'ab_remove_webhook':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $abR=lrTg('deleteWebhook',[],$abTok);jout(['ok'=>$abR['ok']??false]);break;
+
+        case 'ab_bot_info':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $abMe=lrTg('getMe',[],$abTok);$abWh=lrTg('getWebhookInfo',[],$abTok);
+            jout(['ok'=>true,'me'=>$abMe['result']??null,'webhook'=>$abWh['result']??null]);break;
+
+        case 'ab_send_test':
+            $abC=lrLoadConfig();$abTok=trim($abC['py_bot_token']??'');
+            $abCid=trim($body['chat_id']??'');$abText=trim($body['text']??'✅ Aadhaar Bot test — working!');
+            if(!$abTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            if(!$abCid)jout(['ok'=>false,'error'=>'Chat ID required']);
+            $abR=lrTg('sendMessage',['chat_id'=>$abCid,'text'=>$abText,'parse_mode'=>'HTML'],$abTok);
+            lrLog('Test message → chat='.$abCid.' ok='.json_encode($abR['ok']??false),'info');
+            jout(['ok'=>$abR['ok']??false,'tg'=>$abR]);break;
+
+        case 'ab_get_sessions':
+            $abSessions=file_exists(LR_SESSION_FILE)?(json_decode(file_get_contents(LR_SESSION_FILE),true)?:[]):[];
+            jout(['ok'=>true,'sessions'=>$abSessions,'total'=>count($abSessions)]);break;
+
+        case 'ab_clear_sessions':
+            file_put_contents(LR_SESSION_FILE,'{}',LOCK_EX);
+            lrLog('All bot sessions cleared','warn');jout(['ok'=>true]);break;
+
+        case 'ab_delete_session':
+            $abCid=trim($body['chat_id']??'');if(!$abCid)jout(['ok'=>false,'error'=>'chat_id required']);
+            lrSessionDel($abCid);lrLog("Session deleted for chat={$abCid}",'info');jout(['ok'=>true]);break;
+
+        case 'ab_get_logs':
+            $abLogs=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];
+            jout(['ok'=>true,'data'=>array_slice($abLogs,0,200)]);break;
+
+        case 'ab_clear_logs':
+            file_put_contents(LR_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
         default:jout(['ok'=>false,'error'=>'Unknown action']);
     }
 }
@@ -4330,8 +5007,8 @@ RENDER:
 :root{--bg:#030712;--s:#0d1117;--s2:#161b22;--s3:#1c2130;--c:#00f5ff;--g:#39ff14;--r:#ff2d55;--y:#ffd60a;--p:#bf5af2;--o:#ff9f0a;--b:rgba(0,245,255,.15);--t:#e6edf3;--td:#8b949e;--tf:#4a5568;}
 
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-html{background:#030712;color-scheme:dark only;-webkit-text-size-adjust:100%;}
-body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdhani',sans-serif;font-size:15px;width:100vw;overflow-x:hidden;min-height:100dvh;-webkit-font-smoothing:antialiased;}
+html{background:#030712;color-scheme:dark only;-webkit-text-size-adjust:100%;scroll-behavior:auto;height:100%;}
+body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdhani',sans-serif;font-size:15px;width:100vw;overflow:hidden;height:100%;-webkit-font-smoothing:antialiased;}
 @media screen and (orientation:portrait){body{background:#030712!important;color:#e6edf3!important;}.fi,.fsel,.fta{background:#161b22!important;color:#e6edf3!important;}option{background:#161b22;color:#e6edf3;}}
 .lw{display:flex;align-items:center;justify-content:center;min-height:100dvh;padding:16px;background:var(--bg);}
 .lb{background:rgba(13,17,23,.97);border:1px solid var(--b);border-radius:16px;padding:36px;width:100%;max-width:340px;text-align:center;}
@@ -4343,12 +5020,12 @@ body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdha
 .btn:active{transform:scale(.97);}
 .bp{background:var(--c);color:#000;}.bsu{background:var(--g);color:#000;}.bd{background:var(--r);color:#fff;}.bw{background:var(--y);color:#000;}.bg{background:transparent;color:var(--td);border:1px solid var(--b);}.bo{background:var(--o);color:#000;}
 .bsm{padding:5px 10px;font-size:11px;}
-.wrap{display:flex;min-height:100dvh;width:100%;overflow-x:hidden;}
+.wrap{display:flex;height:100vh;width:100%;overflow:hidden;}
 .sb{width:240px;background:rgba(13,17,23,.99);border-right:1px solid var(--b);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10000;transition:transform .3s;overflow-y:auto;}
 .logo{display:flex;align-items:center;gap:12px;padding:18px 16px;border-bottom:1px solid var(--b);}
-.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);}
-.topbar{background:rgba(13,17,23,.95);border-bottom:1px solid var(--b);padding:0 18px;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;}
-.con{padding:18px;flex:1;overflow-x:hidden;}
+.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);height:100vh;overflow:hidden;}
+.topbar{background:rgba(13,17,23,.95);border-bottom:1px solid var(--b);padding:0 18px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;}
+.con{padding:18px;flex:1;overflow-y:auto;overflow-x:hidden;}
 .panel{display:none;}.panel.active{display:block;}
 .card{background:var(--s);border:1px solid var(--b);border-radius:12px;padding:16px;margin-bottom:14px;width:100%;}
 .sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
@@ -4409,14 +5086,15 @@ td{padding:9px 11px;vertical-align:middle;}
 /* FIX indicator box */
 .fix-note{background:rgba(57,255,20,.05);border:1px solid rgba(57,255,20,.3);border-radius:8px;padding:10px 12px;font-family:'Share Tech Mono';font-size:11px;color:var(--g);margin-bottom:12px;line-height:1.8;}
 @media(max-width:768px){
-  html,body{background:#030712!important;width:100vw;}
+  html,body{background:#030712!important;width:100vw;height:100%;overflow:hidden;}
   .sb{transform:translateX(-100%);box-shadow:4px 0 20px rgba(0,0,0,.8);}
   .sb.open{transform:translateX(0);}
   .sov.open{display:block;}
-  .main{margin-left:0!important;width:100%!important;}
+  .wrap{height:100vh;overflow:hidden;}
+  .main{margin-left:0!important;width:100%!important;height:100vh;overflow:hidden;}
+  .con{padding:10px;overflow-y:auto;flex:1;}
   .ham{display:block;}
   .fg{grid-template-columns:1fr;}
-  .con{padding:10px;}
   .card{padding:11px;}
   .br{flex-direction:column;align-items:stretch;}
   .br input,.br select,.br button,.br textarea{width:100%!important;min-width:0;}
@@ -4490,6 +5168,9 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="ni" onclick="nav('hiddeneye',this)" style="color:#39ff14;border-left:2px solid #39ff14">👁 Hidden Eye Bot</button>
         <button class="ni" onclick="nav('promobot',this)" style="color:#ff9f0a;border-left:2px solid #ff9f0a">📢 Promo Bot</button>
     <button class="ni" onclick="nav('linkautomation',this)" style="color:#00f5ff;border-left:2px solid #00f5ff">🔗 Link Automation</button>
+    <button class="ni" onclick="nav('depositbot',this)" style="color:#ff6b1a;border-left:2px solid #ff6b1a">💰 Deposit Bot</button>
+    <button class="ni" onclick="nav('linkrunner',this)" style="color:#7c7cff;border-left:2px solid #7c7cff">🔗 Link Runner</button>
+    <button class="ni" onclick="nav('adharbot',this)" style="color:#63b3ed;border-left:2px solid #63b3ed">👾 Aadhaar Bot</button>
     <a href="?page=logout" class="ni" style="color:var(--r)">🚪 Logout</a>
   </nav>
 </aside>
@@ -6433,6 +7114,352 @@ td{padding:9px 11px;vertical-align:middle;}
 
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 💰 DEPOSIT BOT PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-depositbot">
+    <div class="card" style="border-color:rgba(255,107,26,.5);background:linear-gradient(135deg,rgba(255,107,26,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#ff6b1a;font-size:14px">💰 REBEL B2W DEPOSIT BOT</div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Users /Deposit karke amount dalte hain — QR code auto send hota hai</div>
+        </div>
+      </div>
+      <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--g);line-height:1.8">
+        ✅ <b>Flow:</b> User /Deposit → Amount enter → QR code + bank details → User pays → UTR/Screenshot submit → Admin gets notification
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsu bsm" onclick="rbdSaveCfg()">💾 Save Config</button>
+        <button class="btn bg bsm" onclick="rbdSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="rbdRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="rbdTestLogin()">🔑 Test RB Login</button>
+        <button class="btn bg bsm" onclick="rbdTestBank()">🏦 Test Bank/UPI</button>
+        <button class="btn bsu bsm" onclick="rbdSendTest()">📨 Send Test</button>
+        <button class="btn bsm" style="background:rgba(255,107,26,.2);color:#ff6b1a;border:1px solid #ff6b1a" onclick="rbdLoadLedger()">👥 User Ledger</button>
+        <button class="btn bd bsm" onclick="rbdLoadBlocked()">🚫 Blocked Users</button>
+        <button class="btn bg bsm" onclick="rbdLoadLogs()">📋 Logs</button>
+        <button class="btn bd bsm" onclick="rbdClearLogs()">🗑️ Clear Logs</button>
+      </div>
+    </div>
+
+    <!-- Config Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚙️ BOT CONFIGURATION</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Telegram Bot Token</label><input type="password" id="rbd-token" class="fi" placeholder="123456789:ABCdef..."></div>
+        <div class="fgrp"><label class="fl">👑 Admin Chat ID (notifications)</label><input type="text" id="rbd-admin-chat" class="fi" placeholder="-100xxxx or personal ID"></div>
+      </div>
+      <div style="background:rgba(255,107,26,.07);border:1px solid rgba(255,107,26,.25);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="color:#ff6b1a;font-size:12px;font-weight:700;margin-bottom:8px">🎯 Rebel B2W / RockyBook Account</div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">👤 Username / Phone (loginType)</label><input type="text" id="rbd-rbphone" class="fi" placeholder="username or phone"></div>
+          <div class="fgrp"><label class="fl">🔒 Password</label><input type="password" id="rbd-rbpass" class="fi" placeholder="Account password"></div>
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">🌿 Branch Name</label><input type="text" id="rbd-branch" class="fi" placeholder="RBVIP1D"></div>
+          <div class="fgrp"><label class="fl">🏦 Bank ID (optional)</label><input type="text" id="rbd-bankid" class="fi" placeholder="auto-detect if blank"></div>
+        </div>
+        <div style="background:rgba(57,255,20,.07);border:1px solid rgba(57,255,20,.25);border-radius:6px;padding:10px;font-size:12px;color:var(--g)">🔒 <b>Hardcoded Deposit User:</b> <code>@Ujjwal0999</code> — All deposits go to this account.</div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">💰 Min Deposit (₹)</label><input type="number" id="rbd-minDep" class="fi" placeholder="500" min="100" value="500"></div>
+        <div class="fgrp"><label class="fl">💰 Max Deposit (₹)</label><input type="number" id="rbd-maxDep" class="fi" placeholder="100000" value="100000"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">👋 Welcome Message (\n for newline)</label><textarea id="rbd-welcome" class="fi fta" rows="3"></textarea></div>
+        <div class="fgrp"><label class="fl">✅ Deposit Thanks Message</label><textarea id="rbd-thanks" class="fi fta" rows="3"></textarea></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔒 Change Admin Password (min 4 chars)</label><input type="password" id="rbd-newpass" class="fi" placeholder="Leave blank to keep current"></div>
+      </div>
+      <button class="btn bsu" onclick="rbdSaveCfg()" style="width:100%;margin-top:8px">💾 Save Config</button>
+    </div>
+
+    <!-- Users/Logs display -->
+    <div class="card" id="rbd-info-card" style="display:none">
+      <div class="sh"><div class="st" id="rbd-info-title" style="color:var(--c)">📊 Info</div><button class="btn bg bsm" onclick="g('rbd-info-card').style.display='none'">✕ Close</button></div>
+      <div id="rbd-info-body"></div>
+    </div>
+
+    <!-- Logs Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">📋 DEPOSIT BOT LOGS</div><div style="display:flex;gap:6px"><button class="btn bg bsm" onclick="rbdLoadLogs()">🔄 Refresh</button><button class="btn bd bsm" onclick="rbdClearLogs()">🗑️ Clear</button></div></div>
+      <div class="log-t" id="rbd-log-box"><div style="color:var(--td)">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 🔗 LINK RUNNER PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-linkrunner">
+    <div class="card" style="border-color:rgba(124,124,255,.5);background:linear-gradient(135deg,rgba(124,124,255,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:var(--c);font-size:14px">🔗 REBEL LINK RUNNER <small style="font-size:10px;color:var(--td)">v<?=LR_VERSION?></small></div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Specific links run karo — responses Telegram pe send karo</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--g)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn bg bsm" onclick="lrRunAll()">▶️ Run All Now</button>
+        <button class="btn bsu bsm" onclick="lrSavePage()">💾 Save All</button>
+        <button class="btn bg bsm" onclick="lrSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="lrRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="lrLoadLogs()">📋 Refresh Logs</button>
+        <button class="btn bd bsm" onclick="lrClearLogs()">🗑️ Clear Logs</button>
+        <span id="lr-run-status" style="font-size:12px;color:var(--td)"></span>
+      </div>
+    </div>
+
+    <!-- Global Config -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚙️ GLOBAL CONFIG</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Bot Token</label><input type="password" id="lr-token" class="fi" placeholder="123456789:ABC..."></div>
+        <div class="fgrp"><label class="fl">💬 Default Chat ID</label><input type="text" id="lr-chat" class="fi" placeholder="-100xxxx or @channel"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">📝 Message Prefix (use \n for newline)</label><input type="text" id="lr-prefix" class="fi" placeholder="🔗 &lt;b&gt;Link Runner&lt;/b&gt;\n\n"></div>
+        <div class="fgrp"><label class="fl">🔑 URL Run Secret (?lr_run=1&amp;secret=X)</label><input type="text" id="lr-secret" class="fi" placeholder="changeme123"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔔 Webhook Bot Token (blank = use main)</label><input type="text" id="lr-wtoken" class="fi" placeholder="Same or different token"></div>
+        <div class="fgrp"><label class="fl">📟 Webhook Trigger Command</label><input type="text" id="lr-wcmd" class="fi" placeholder="/run"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔒 Change Admin Password (min 4 chars)</label><input type="password" id="lr-newpass" class="fi" placeholder="Leave blank to keep current"></div>
+      </div>
+      <button class="btn bsu" onclick="lrSaveConfig()" style="width:100%;margin-top:8px">💾 Save Config</button>
+    </div>
+
+    <!-- Python Debugger Card -->
+    <div class="card" style="border-color:rgba(191,90,242,.4)">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#bf5af2">🐍 PYTHON ADHAR DEBUGGER</div>
+          <div style="font-size:11px;color:var(--td);margin-top:3px">Python <code style="color:#bf5af2">requests</code> code paste karo → automatically Link Runner mein import ho jayega</div>
+        </div>
+        <button class="btn bsm" style="background:rgba(191,90,242,.15);color:#bf5af2;border:1px solid rgba(191,90,242,.4)" onclick="lrTogglePyDebugger()">▼ Show / Hide</button>
+      </div>
+      <div id="lr-py-debugger" style="display:none">
+        <div style="background:rgba(191,90,242,.06);border:1px solid rgba(191,90,242,.2);border-radius:8px;padding:10px;font-size:11px;color:var(--td);margin-bottom:12px;line-height:1.8">
+          <b style="color:#bf5af2">Kaise use kare:</b><br>
+          1️⃣ Python <code style="color:#bf5af2">requests</code> snippet paste karo neeche<br>
+          2️⃣ <b style="color:var(--g)">🔍 Parse &amp; Import</b> click karo<br>
+          3️⃣ URL, Method, Headers, Body automatically extract hoke naya Link Rule ban jayega<br>
+          4️⃣ <b>💾 Save All</b> click karo<br><br>
+          <b>Supported formats:</b><br>
+          <code style="color:#bf5af2">requests.post('url', headers={...}, json={...})</code><br>
+          <code style="color:#bf5af2">requests.get('url', headers={...})</code><br>
+          <code style="color:#bf5af2">requests.put('url', data='body')</code>
+        </div>
+        <div class="fgrp mb">
+          <label class="fl">🐍 Python Code (requests snippet)</label>
+          <textarea id="lr-py-input" class="fi fta" rows="8" style="font-family:'Share Tech Mono',monospace;font-size:12px;min-height:160px" placeholder="import requests&#10;&#10;response = requests.post(&#10;    'https://api.example.com/data',&#10;    headers={&#10;        'Authorization': 'Bearer YOUR_TOKEN',&#10;        'Content-Type': 'application/json'&#10;    },&#10;    json={&#10;        'key': 'value'&#10;    }&#10;)&#10;print(response.json())"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn bsm" style="background:rgba(191,90,242,.2);color:#bf5af2;border:1px solid rgba(191,90,242,.4)" onclick="lrParsePython()">🔍 Parse &amp; Import as New Link</button>
+          <button class="btn bg bsm" onclick="lrParsePythonDebug()">🐛 Debug Only (show parsed)</button>
+          <button class="btn bsm" style="background:var(--s2);color:var(--td);border:1px solid var(--b)" onclick="g('lr-py-input').value='';g('lr-py-result').style.display='none'">🗑️ Clear</button>
+        </div>
+        <div id="lr-py-result" style="display:none;margin-top:12px;background:var(--s2);border:1px solid var(--b);border-radius:8px;padding:12px;font-size:12px;font-family:'Share Tech Mono',monospace">
+        </div>
+      </div>
+    </div>
+
+    <!-- Link Rules Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">🔗 LINK RULES <span id="lr-link-count" style="background:rgba(0,245,255,.1);color:var(--c);padding:2px 8px;border-radius:4px;font-size:10px;margin-left:6px">0</span></div><button class="btn bsu bsm" onclick="lrAddLink()">+ Add Link</button></div>
+      <div id="lr-links-container"></div>
+    </div>
+
+    <!-- Run Results -->
+    <div class="card" id="lr-results-card" style="display:none">
+      <div class="sh"><div class="st" style="color:var(--g)">📊 LAST RUN RESULTS</div></div>
+      <div id="lr-results-body"></div>
+    </div>
+
+    <!-- Logs -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">📋 LINK RUNNER LOGS</div><div style="display:flex;gap:6px"><button class="btn bg bsm" onclick="lrLoadLogs()">🔄</button><button class="btn bd bsm" onclick="lrClearLogs()">🗑️</button></div></div>
+      <div class="log-t" id="lr-log-box"><div style="color:var(--td)">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 👾 AADHAAR BOT PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-adharbot">
+    <div class="card" style="border-color:rgba(99,179,237,.5);background:linear-gradient(135deg,rgba(99,179,237,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#63b3ed;font-size:14px">👾 PYTHON AADHAAR BOT</div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Bot messages, commands aur flow customize karo — save hone pe <code style="color:#63b3ed">bot_config.json</code> auto-generate hota hai</div>
+        </div>
+      </div>
+      <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--td);line-height:1.9">
+        💡 <b style="color:#63b3ed">Flow:</b> User <code>/fetch &lt;mobile&gt; &lt;name&gt;</code> → Loading animation → Captcha → OTP → Aadhaar PDF send<br>
+        🔄 <b>Yahan save karo</b> → <code>bot_config.json</code> update → Python bot automatically naya config use karega (restart nahi chahiye)
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--g)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed" onclick="adharSaveConfig()">💾 Save Config</button>
+        <button class="btn bg bsm" onclick="adharSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="adharRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="adharCheckBotInfo()">🔍 Bot Status</button>
+        <button class="btn bsu bsm" onclick="adharSendTestMsg()">📨 Send Test Message</button>
+        <button class="btn bg bsm" onclick="adharLoadLogs()">📋 Logs</button>
+        <button class="btn bd bsm" onclick="adharClearLogs()">🗑️ Clear Logs</button>
+        <button class="btn bg bsm" onclick="adharLoadSessions()">👥 Active Sessions</button>
+        <button class="btn bd bsm" onclick="adharClearSessions()">🧹 Clear Sessions</button>
+        <button class="btn bd bsm" onclick="adharResetDefaults()">↩️ Reset Defaults</button>
+      </div>
+    </div>
+
+    <!-- Bot Status Card -->
+    <div class="card" id="ab-status-card" style="display:none">
+      <div class="sh"><div class="st" id="ab-status-title" style="color:#63b3ed">📊 Status</div><button class="btn bd bsm" onclick="g('ab-status-card').style.display='none'">✕</button></div>
+      <div id="ab-status-body"></div>
+    </div>
+
+    <!-- Test Message Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">📨 TEST MESSAGE</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">💬 Chat ID (test message bhejne ke liye)</label><input type="text" id="ab-test-chat" class="fi" placeholder="apna Telegram Chat ID"></div>
+        <div class="fgrp"><label class="fl">📝 Message Text</label><input type="text" id="ab-test-text" class="fi" value="✅ Aadhaar Bot test message — working!" placeholder="Test message text"></div>
+      </div>
+      <div id="ab-test-result" style="display:none;margin-top:8px;font-size:12px;padding:8px;background:var(--s2);border-radius:6px"></div>
+    </div>
+
+    <!-- Bot Credentials -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">🔐 BOT CREDENTIALS</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Bot Token (Python bot ka alag token)</label><input type="password" id="ab-token" class="fi" placeholder="123456789:ABCdef..."></div>
+        <div class="fgrp"><label class="fl">🌐 UIDAI Proxy (optional — socks5://host:port)</label><input type="text" id="ab-proxy" class="fi" placeholder="socks5://127.0.0.1:1080 ya khali chhodo"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">📟 Fetch Command</label><input type="text" id="ab-fetch-cmd" class="fi" placeholder="/fetch"></div>
+        <div class="fgrp"><label class="fl">❌ Cancel Command</label><input type="text" id="ab-cancel-cmd" class="fi" placeholder="/cancel"></div>
+        <div class="fgrp"><label class="fl">🔄 Refresh Command</label><input type="text" id="ab-refresh-cmd" class="fi" placeholder="/refresh"></div>
+      </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('credentials')">💾 Save Credentials</button>
+      <div id="ab-cred-result" style="display:none;margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <!-- Bot Messages -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">💬 BOT MESSAGES</div></div>
+      <div class="fgrp mb">
+        <label class="fl">👋 Start / Welcome Message</label>
+        <textarea id="ab-start-msg" class="fi fta" rows="5" placeholder="/start ya /fetch pe dono ko yahi message jaata hai"></textarea>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">📸 Captcha Message</label>
+          <textarea id="ab-captcha-msg" class="fi fta" rows="4"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">📲 OTP Message <span style="color:var(--td);font-size:10px">({mobile} use kar sakte ho)</span></label>
+          <textarea id="ab-otp-msg" class="fi fta" rows="4"></textarea>
+        </div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">✅ Success Message (PDF send hone ke baad)</label>
+          <textarea id="ab-success-msg" class="fi fta" rows="3"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">❌ Cancel Message</label>
+          <textarea id="ab-cancel-msg" class="fi fta" rows="3"></textarea>
+        </div>
+      </div>
+      <div class="fgrp mb">
+        <label class="fl">⚠️ Error Prefix</label>
+        <input type="text" id="ab-error-prefix" class="fi" placeholder="❌ &lt;b&gt;Error:&lt;/b&gt;">
+      </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('messages')">💾 Save Messages</button>
+      <div id="ab-msg-result" style="display:none;margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <!-- Loading Steps -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">⏳ LOADING ANIMATIONS</div></div>
+      <div style="font-size:11px;color:var(--td);margin-bottom:12px;background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:6px;padding:8px 12px;line-height:1.8">
+        Har line ek step hai — bot ek ek karke yeh messages bhejta hai, jaise real processing chal rahi ho.<br>
+        <b style="color:#63b3ed">Tip:</b> Interesting emojis + technical jargon = realistic loading effect 😈
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">⏳ Fetch / Initial Loading Steps <span style="color:var(--td);font-size:10px">(ek line = ek step)</span></label>
+          <textarea id="ab-loading-steps" class="fi fta" rows="10" style="font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">🔐 OTP Verify Loading Steps <span style="color:var(--td);font-size:10px">(ek line = ek step)</span></label>
+          <textarea id="ab-otp-steps" class="fi fta" rows="10" style="font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+        </div>
+      </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('loading')">💾 Save Loading Animations</button>
+      <div id="ab-load-result" style="display:none;margin-top:8px;font-size:12px"></div>
+    </div>
+
+    <!-- Save All button -->
+    <div class="card">
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;padding:12px;font-size:14px" onclick="adharSaveConfig()">💾 Save ALL Config</button>
+      <div id="ab-save-result" style="margin-top:10px;font-size:12px;display:none"></div>
+    </div>
+
+    <!-- Webhook Info Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">🔗 WEBHOOK INFO</div></div>
+      <div style="font-size:12px;color:var(--td);line-height:2;background:var(--s2);padding:12px;border-radius:8px;border:1px solid var(--b)">
+        <b style="color:var(--t)">Set Webhook URL (PHP side):</b><br>
+        <code id="ab-webhook-url" style="color:#63b3ed;font-size:11px;word-break:break-all"><?php $abPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';echo htmlspecialchars($abPr.($_SERVER['HTTP_HOST']??'yoursite.com').strtok($_SERVER['REQUEST_URI']??'/','?').'?rbd_webhook=1'); ?></code><br><br>
+        <b style="color:var(--t)">Python bot ke liye webhook URL:</b><br>
+        <code id="ab-py-webhook-url" style="color:var(--g);font-size:11px;word-break:break-all"><?php echo htmlspecialchars($abPr.($_SERVER['HTTP_HOST']??'yoursite.com').strtok($_SERVER['REQUEST_URI']??'/','?')); ?>?py_webhook=1</code><br>
+        <div style="margin-top:8px;font-size:11px;color:var(--tf)">💡 Python bot ka token alag ho sakta hai — Set Webhook button uska token use karta hai.</div>
+      </div>
+    </div>
+
+    <!-- Active Sessions Card -->
+    <div class="card">
+      <div class="sh">
+        <div class="st" style="color:#63b3ed">👥 ACTIVE BOT SESSIONS</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="adharLoadSessions()">🔄 Refresh</button>
+          <button class="btn bd bsm" onclick="adharClearSessions()">🧹 Clear All</button>
+        </div>
+      </div>
+      <div id="ab-sessions-body"><div style="color:var(--td);font-size:12px;text-align:center;padding:16px">Click 🔄 Refresh to load sessions</div></div>
+    </div>
+
+    <!-- Logs Card -->
+    <div class="card">
+      <div class="sh">
+        <div class="st" style="color:#63b3ed">📋 AADHAAR BOT LOGS</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="adharLoadLogs()">🔄 Refresh</button>
+          <button class="btn bd bsm" onclick="adharClearLogs()">🗑️ Clear</button>
+        </div>
+      </div>
+      <div class="log-t" id="ab-log-box"><div style="color:var(--td)">Loading...</div></div>
+    </div>
+  </div>
+
 <?php endif ?>
 
 <script>
@@ -6446,9 +7473,10 @@ function nav(id,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
-  window.scrollTo({top:0,behavior:'instant'});
-  document.documentElement.scrollTop=0;document.body.scrollTop=0;
-  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad};
+  // .con is the scroll container — reset to top on every nav
+  const conEl=document.querySelector('.con');
+  if(conEl) conEl.scrollTop=0;
+  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad,depositbot:rbdInit,linkrunner:lrInit,adharbot:adharBotInit};
   if(m[id])m[id]();
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
@@ -9321,5 +10349,537 @@ async function laSave(silent=false){
     toast('Save failed: '+(r.error||''), 'error');
     if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--r);font-family:\'Share Tech Mono\';font-size:12px">&#10060; '+(r.error||'Unknown error')+'</div>'; }
   }
+}
+
+// ═══════════════════════════════════════════════════════════
+// 💰 DEPOSIT BOT JAVASCRIPT
+// ═══════════════════════════════════════════════════════════
+function rbdInit(){ rbdLoadCfg(); rbdLoadLogs(); }
+
+async function rbdLoadCfg(){
+  const r=await api('rbd_get_config');if(!r.ok)return;const d=r.data||{};
+  g('rbd-token').value=d.bot_token||'';g('rbd-admin-chat').value=d.admin_chat_id||'';
+  g('rbd-rbphone').value=d.rb_phone||'';g('rbd-rbpass').value=d.rb_password||'';
+  g('rbd-branch').value=d.rb_branch||'RBVIP1D';g('rbd-bankid').value=d.rb_bank_id||'';
+  g('rbd-minDep').value=d.min_deposit||500;g('rbd-maxDep').value=d.max_deposit||100000;
+  g('rbd-welcome').value=d.welcome_msg||'';g('rbd-thanks').value=d.deposit_thanks||'';
+}
+
+async function rbdSaveCfg(){
+  const payload={
+    bot_token:g('rbd-token').value.trim(),admin_chat_id:g('rbd-admin-chat').value.trim(),
+    rb_phone:g('rbd-rbphone').value.trim(),rb_password:g('rbd-rbpass').value.trim(),
+    rb_branch:g('rbd-branch').value.trim()||'RBVIP1D',rb_bank_id:g('rbd-bankid').value.trim(),
+    min_deposit:parseInt(g('rbd-minDep').value)||500,max_deposit:parseInt(g('rbd-maxDep').value)||100000,
+    welcome_msg:g('rbd-welcome').value,deposit_thanks:g('rbd-thanks').value,
+    new_pass:g('rbd-newpass').value.trim(),
+  };
+  const r=await api('rbd_save_config',payload);
+  r.ok?toast('✅ Deposit Bot config saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function rbdSetWebhook(){
+  toast('Setting webhook...','info');
+  const r=await api('rbd_set_webhook');
+  r.ok?toast('✅ Webhook set: '+r.webhook_url,'success'):toast('❌ '+(r.error||r.tg?.description||'failed'),'error');
+}
+async function rbdRemoveWebhook(){const r=await api('rbd_remove_webhook');r.ok?toast('Webhook removed','info'):toast('Error','error');}
+
+async function rbdTestLogin(){
+  toast('Testing Rebel B2W login...','info');
+  const r=await api('rbd_test_rb_login');
+  if(r.ok){const u=r.user||{};toast('✅ Login OK! '+(u.clientName||JSON.stringify(u).slice(0,60)),'success');}
+  else toast('❌ '+(r.error||'Login failed'),'error');
+}
+
+async function rbdTestBank(){
+  toast('Fetching bank details...','info');
+  const r=await api('rbd_test_bank');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='🏦 Bank/UPI Details';
+  if(r.ok&&r.bank){
+    const b=r.bank;toast('✅ Bank details found!','success');
+    body.innerHTML=`<div style="font-size:13px;line-height:2.2;background:var(--s2);padding:14px;border-radius:8px">
+      <span style="color:var(--g)">✅ Bank Details (powerdreams.co):</span><br>
+      📱 UPI ID: <code>${b.upiId||'—'}</code><br>
+      👤 Holder: <b>${b.accHolderName||'—'}</b><br>
+      🔢 Acc No: <code>${b.accNo||'—'}</code><br>
+      🏛 IFSC: <code>${b.ifscCode||'—'}</code><br>
+      🏦 Bank: ${b.bankName||'—'}</div>`;
+  }else{toast('❌ Bank details not found','error');body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ fetchAvailablePeer failed<pre style="font-size:10px;margin-top:8px;color:var(--td)">${JSON.stringify(r,null,2)}</pre></div>`;}
+}
+
+async function rbdSendTest(){
+  const cid=g('rbd-admin-chat').value.trim();
+  toast('Sending test message...','info');
+  const r=await api('rbd_send_test',{chat_id:cid});
+  r.ok?toast('✅ Message sent!','success'):toast('❌ '+(r.error||'failed'),'error');
+}
+
+async function rbdLoadLedger(){
+  const r=await api('rbd_get_ledger');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='👥 User Ledger';
+  if(!r.ok||!Object.keys(r.ledger||{}).length){body.innerHTML='<div style="color:var(--td)">No users yet.</div>';return;}
+  let rows='';
+  Object.entries(r.ledger||{}).forEach(([cid,u])=>{
+    rows+=`<tr>
+      <td style="font-family:monospace;font-size:11px">${cid}</td>
+      <td style="color:var(--g)">₹${parseFloat(u.balance||0).toFixed(2)}</td>
+      <td>${(u.deposits||[]).length}</td>
+      <td>${(u.withdrawals||[]).length}</td>
+      <td><button class="btn bsu bsm" onclick="rbdApprovePrompt('${cid}')">✅ Credit</button></td>
+    </tr>`;
+  });
+  body.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--td)">Total Users: <b style="color:var(--c)">${r.total_users}</b></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Balance</th><th>Deposits</th><th>Withdrawals</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function rbdApprovePrompt(chatId){
+  const amt=prompt('Approve deposit amount (₹):');if(!amt||isNaN(parseFloat(amt)))return;
+  const utr=prompt('UTR number (optional):');
+  const r=await api('rbd_approve_deposit',{chat_id:chatId,amount:parseFloat(amt),utr:utr||''});
+  if(r.ok){toast('✅ Deposit approved! Balance updated.','success');rbdLoadLedger();}
+  else toast('❌ '+(r.error||''),'error');
+}
+
+async function rbdLoadBlocked(){
+  const r=await api('rbd_get_blocked');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='🚫 Blocked Users';
+  if(!r.ok||!Object.keys(r.blocked||{}).length){body.innerHTML='<div style="color:var(--g)">✅ No blocked users.</div>';return;}
+  let rows='';
+  Object.entries(r.blocked||{}).forEach(([cid,info])=>{
+    rows+=`<tr><td style="font-family:monospace;font-size:11px">${cid}</td><td style="color:var(--r)">${info.remaining_mins} min</td><td><button class="btn bsu bsm" onclick="rbdUnblock('${cid}')">✅ Unblock</button></td></tr>`;
+  });
+  body.innerHTML=`<div style="margin-bottom:8px;color:var(--r)">🚫 Blocked: <b>${r.total}</b></div><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Time Left</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function rbdUnblock(cid){const r=await api('rbd_unblock_user',{chat_id:cid});r.ok?toast('✅ Unblocked: '+cid,'success'):toast('Error','error');rbdLoadBlocked();}
+
+async function rbdLoadLogs(){
+  const r=await api('rbd_get_logs');const box=g('rbd-log-box');
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function rbdClearLogs(){await api('rbd_clear_logs');rbdLoadLogs();toast('Logs cleared','info');}
+
+// ═══════════════════════════════════════════════════════════
+// 🔗 LINK RUNNER JAVASCRIPT
+// ═══════════════════════════════════════════════════════════
+let _lrLinks=[];let _lrLinkIdx=0;
+
+function lrInit(){ lrLoadConfig2(); lrLoadLogs(); }
+
+async function lrLoadConfig2(){
+  const r=await api('lr_get_config');if(!r.ok)return;const d=r.data||{};
+  g('lr-token').value=d.bot_token||'';g('lr-chat').value=d.chat_id||'';
+  g('lr-prefix').value=d.send_prefix||'';g('lr-secret').value=d.run_secret||'';
+  g('lr-wtoken').value=d.webhook_token||'';g('lr-wcmd').value=d.webhook_cmd||'/run';
+  _lrLinks=d.links||[];lrRenderLinks();
+}
+
+async function lrSaveConfig(){
+  const payload={bot_token:g('lr-token').value.trim(),chat_id:g('lr-chat').value.trim(),send_prefix:g('lr-prefix').value,run_secret:g('lr-secret').value.trim(),webhook_token:g('lr-wtoken').value.trim(),webhook_cmd:g('lr-wcmd').value.trim(),new_pass:g('lr-newpass').value.trim()};
+  const r=await api('lr_save_config',payload);r.ok?toast('✅ Link Runner config saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function lrSaveLinks(){
+  const r=await api('lr_save_links',{links:_lrLinks});r.ok?toast('✅ '+r.count+' link(s) saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function lrSavePage(){ await lrSaveConfig(); await lrSaveLinks(); }
+
+async function lrSetWebhook(){toast('Setting webhook...','info');const r=await api('lr_set_webhook');r.ok?toast('✅ Webhook set: '+r.webhook_url,'success'):toast('❌ '+(r.error||r.tg?.description||'failed'),'error');}
+async function lrRemoveWebhook(){const r=await api('lr_remove_webhook');r.ok?toast('Webhook removed','info'):toast('Error','error');}
+
+async function lrRunAll(){
+  const st=g('lr-run-status');st.textContent='⏳ Running...';st.style.color='var(--y)';
+  const r=await api('lr_run_now');st.textContent='';
+  if(!r.ok){toast('Error: '+(r.error||''),'error');return;}
+  lrShowResults(r.results||[]);toast('✅ Done! '+r.success+'/'+(r.results||[]).length+' success','success');lrLoadLogs();
+}
+
+function lrAddLink(preset={}){
+  const id=preset.id||('l_'+Date.now()+'_'+(++_lrLinkIdx));
+  _lrLinks.push({id,name:preset.name||'New Link',enabled:preset.enabled!==false,url:preset.url||'',method:preset.method||'GET',headers:preset.headers||'',body:preset.body||'',timeout:preset.timeout||30,ssl_verify:preset.ssl_verify!==false,response_path:preset.response_path||'',reply_template:preset.reply_template||'📌 <b>{name}</b>\n\n{response}',error_message:preset.error_message||'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',send_on_error:preset.send_on_error||false,chat_id:preset.chat_id||'',screenshot_mode:preset.screenshot_mode||false,screenshot_caption:preset.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}'});
+  lrRenderLinks();const c=g('lr-links-container');if(c)c.lastElementChild?.scrollIntoView({behavior:'smooth'});
+}
+
+function lrRenderLinks(){
+  const c=g('lr-links-container');if(!c)return;c.innerHTML='';g('lr-link-count').textContent=_lrLinks.length;
+  _lrLinks.forEach((lk,i)=>c.appendChild(lrBuildLinkEl(lk,i)));
+}
+
+function lrEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function lrSyncField(id,field,val){const lk=_lrLinks.find(l=>l.id===id);if(lk)lk[field]=val;}
+function lrToggleCard(id){const el=g('lrcard_'+id);if(el)el.classList.toggle('lrcollapsed');}
+function lrToggleSsCap(id,show){const w=g('lrss_wrap_'+id);if(w)w.style.display=show?'':'none';}
+function lrDeleteLink(id){if(!confirm('Delete this link?'))return;_lrLinks=_lrLinks.filter(l=>l.id!==id);lrRenderLinks();}
+
+function lrBuildLinkEl(lk,i){
+  const div=document.createElement('div');
+  div.id='lrcard_'+lk.id;
+  div.style.cssText='background:var(--s2);border:1px solid var(--b);border-radius:8px;padding:14px;margin-bottom:10px;position:relative';
+  div.innerHTML=`
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+  <div style="display:flex;align-items:center;gap:8px">
+    <span style="cursor:pointer;user-select:none;color:var(--td)" onclick="lrToggleCard('${lk.id}')">▼</span>
+    <input type="text" value="${lrEsc(lk.name)}" id="lrn_${lk.id}" style="background:transparent;border:none;border-bottom:1px solid var(--b);border-radius:0;padding:2px 4px;width:160px;color:var(--t);font-weight:600;outline:none" onchange="lrSyncField('${lk.id}','name',this.value)">
+    <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;${lk.enabled?'background:rgba(57,255,20,.15);color:var(--g);border:1px solid rgba(57,255,20,.3)':'background:rgba(255,45,85,.15);color:var(--r);border:1px solid rgba(255,45,85,.3)'}" id="lren_badge_${lk.id}">${lk.enabled?'ON':'OFF'}</span>
+  </div>
+  <div style="display:flex;gap:5px;flex-wrap:wrap">
+    <button class="btn bg bsm" onclick="lrRunSingle('${lk.id}')">▶ Test</button>
+    <button class="btn bd bsm" onclick="lrDeleteLink('${lk.id}')">🗑</button>
+  </div>
+</div>
+<div style="font-size:11px;color:var(--td);font-family:monospace;word-break:break-all;margin-bottom:8px" id="lrurl_preview_${lk.id}">${lrEsc(lk.url)||'<span style="color:var(--tf)">No URL</span>'}</div>
+<div id="lrbody_${lk.id}" style="display:none">
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">🌐 URL</label><input type="text" id="lru_${lk.id}" class="fi" value="${lrEsc(lk.url)}" placeholder="https://..." onchange="lrSyncField('${lk.id}','url',this.value);g('lrurl_preview_${lk.id}').textContent=this.value||'No URL'"></div>
+    <div class="fgrp" style="max-width:110px"><label class="fl">Method</label><select id="lrm_${lk.id}" class="fsel fi" onchange="lrSyncField('${lk.id}','method',this.value)">${['GET','POST','PUT','PATCH','DELETE'].map(m=>`<option${lk.method===m?' selected':''}>${m}</option>`).join('')}</select></div>
+    <div class="fgrp" style="max-width:100px"><label class="fl">Timeout(s)</label><input type="number" id="lrt_${lk.id}" class="fi" value="${lk.timeout||30}" min="5" max="120" onchange="lrSyncField('${lk.id}','timeout',+this.value)"></div>
+  </div>
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">📋 Headers (Key: Value per line)</label><textarea id="lrh_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','headers',this.value)">${lrEsc(lk.headers)}</textarea></div>
+    <div class="fgrp"><label class="fl">📦 Request Body (POST/PUT)</label><textarea id="lrb_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','body',this.value)">${lrEsc(lk.body)}</textarea></div>
+  </div>
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">🔍 Response JSON Path (e.g. data.result)</label><input id="lrrp_${lk.id}" class="fi" value="${lrEsc(lk.response_path)}" placeholder="Leave blank for auto-detect" onchange="lrSyncField('${lk.id}','response_path',this.value)"></div>
+    <div class="fgrp"><label class="fl">💬 Override Chat ID (blank = use global)</label><input id="lrci_${lk.id}" class="fi" value="${lrEsc(lk.chat_id)}" placeholder="Optional" onchange="lrSyncField('${lk.id}','chat_id',this.value)"></div>
+  </div>
+  <div class="fgrp mb"><label class="fl">📝 Reply Template</label><textarea id="lrrt_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','reply_template',this.value)">${lrEsc(lk.reply_template)}</textarea><div style="font-size:10px;color:var(--td);margin-top:4px">Vars: {name} {url} {response} {result} {http_code} {status} {ts} {date} {time} + any JSON key</div></div>
+  <div class="fgrp mb"><label class="fl">❌ Error Message Template</label><textarea id="lrem_${lk.id}" class="fi fta" rows="2" onchange="lrSyncField('${lk.id}','error_message',this.value)">${lrEsc(lk.error_message)}</textarea></div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrenabled_${lk.id}" ${lk.enabled?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','enabled',this.checked);const b=g('lren_badge_${lk.id}');if(b){b.textContent=this.checked?'ON':'OFF';b.style.color=this.checked?'var(--g)':'var(--r)'}"><span style="font-size:12px">Enabled</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrssl_${lk.id}" ${lk.ssl_verify!==false?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','ssl_verify',this.checked)"><span style="font-size:12px">SSL Verify</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrsoe_${lk.id}" ${lk.send_on_error?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','send_on_error',this.checked)"><span style="font-size:12px">Send on Error</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrssm_${lk.id}" ${lk.screenshot_mode?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','screenshot_mode',this.checked);lrToggleSsCap('${lk.id}',this.checked)"><span style="font-size:12px">📸 Screenshot Mode</span></label>
+  </div>
+  <div id="lrss_wrap_${lk.id}" style="${lk.screenshot_mode?'':'display:none'}">
+    <div class="fgrp mb"><label class="fl">📸 Screenshot Caption (HTML)</label><textarea id="lrssc_${lk.id}" class="fi fta" rows="2" onchange="lrSyncField('${lk.id}','screenshot_caption',this.value)">${lrEsc(lk.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')}</textarea><div style="font-size:10px;color:var(--td);margin-top:4px">Vars: {name} {url} {ts} {date} {time}</div></div>
+    <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--g)">✅ <b>No browser install needed!</b> Free APIs use hoti hain (thum.io → microlink).</div>
+  </div>
+  <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--b)">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrffm_${lk.id}" ${lk.form_fill_mode?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','form_fill_mode',this.checked);lrToggleFormFill('${lk.id}',this.checked)"><span style="font-size:12px">📋 Form Fill Mode (Bot user se form fields puchega)</span></label>
+  </div>
+  <div id="lrff_wrap_${lk.id}" style="${lk.form_fill_mode?'':'display:none'};margin-top:8px">
+    <div class="fgrp mb">
+      <label class="fl">📋 Form Fields (comma separated)</label>
+      <input type="text" id="lrff_${lk.id}" class="fi" value="${lrEsc(lk.form_fields||'')}" placeholder="username, password, email" onchange="lrSyncField('${lk.id}','form_fields',this.value)">
+      <div style="font-size:10px;color:var(--td);margin-top:4px">Khali chhodo = site se auto-detect. Ya manually: <code>username, password, email</code></div>
+    </div>
+    <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--td)">
+      📌 Bot pe <b>/fill ${lrEsc(lk.name||'link_name')}</b> command bhejo → bot har field puchega → reply karo → submit.<br>
+      URL: <code>https://site.com/login?user={username}&pass={password}</code><br>
+      Body: <code>username={username}&password={password}</code>
+    </div>
+  </div>
+  <div id="lrresult_${lk.id}" style="margin-top:10px;display:none;background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;font-size:12px"></div>
+</div>`;
+  div.querySelector('[onclick*="lrToggleCard"]')?.addEventListener('click',()=>{
+    const body=g('lrbody_'+lk.id);if(body)body.style.display=body.style.display==='none'?'block':'none';
+  });
+  return div;
+}
+
+async function lrRunSingle(linkId){
+  const box=g('lrresult_'+linkId);if(box){box.style.display='block';box.innerHTML='<span style="color:var(--y)">⏳ Testing...</span>';}
+  const r=await api('lr_run_single',{link_id:linkId});
+  if(!r.ok){if(box)box.innerHTML='<span style="color:var(--r)">Error: '+(r.error||'')+'</span>';return;}
+  const res=r.result||{};const isSS=res.mode==='screenshot';
+  if(box){box.innerHTML=`<b style="color:${res.failed?'var(--r)':'var(--g)'}">${res.failed?'❌ FAILED':'✅ SUCCESS'}</b>`+(isSS?' <span style="background:rgba(0,245,255,.1);color:var(--c);padding:1px 6px;border-radius:3px;font-size:10px">📸 Screenshot</span>':` HTTP <code>${res.code}</code>`)+(res.sent?' <span style="color:var(--g)">| Sent ✓</span>':'')+(!isSS?`<div style="color:var(--td);font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:150px;overflow:auto;margin-top:6px">${lrEsc(String(res.extracted||'').slice(0,500))}</div>`:'');}
+  lrLoadLogs();
+}
+
+function lrShowResults(results){
+  const card=g('lr-results-card');const body=g('lr-results-body');if(!card||!body)return;
+  card.style.display='block';
+  body.innerHTML=results.map(r=>`<div style="background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><b>${lrEsc(r.name)}</b><div style="display:flex;gap:5px;align-items:center">${r.mode==='screenshot'?'<span style="background:rgba(0,245,255,.1);color:var(--c);padding:1px 6px;border-radius:3px;font-size:10px">📸</span>':''}<span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;${r.failed?'background:rgba(255,45,85,.15);color:var(--r)':'background:rgba(57,255,20,.15);color:var(--g)'}">${r.failed?'❌ FAILED':'✅ OK'}${r.mode!=='screenshot'?' HTTP '+r.code:''}</span>${r.sent?'<span style="color:var(--g);font-size:11px">✓ Sent</span>':''}</div></div>${(!r.failed&&r.mode!=='screenshot')?`<div style="font-family:monospace;font-size:11px;margin-top:6px;white-space:pre-wrap;max-height:80px;overflow:auto;color:var(--td)">${lrEsc(String(r.extracted||'').slice(0,300))}</div>`:''}</div>`).join('');
+}
+
+async function lrLoadLogs(){
+  const r=await api('lr_get_logs');const box=g('lr-log-box');if(!box)return;
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function lrClearLogs(){await api('lr_clear_logs');lrLoadLogs();toast('Logs cleared','info');}
+
+// ─── Form Fill Mode toggle ────────────────────────────────
+function lrToggleFormFill(id,show){const w=g('lrff_wrap_'+id);if(w)w.style.display=show?'block':'none';}
+
+// lr_ prefix wale py functions (Link Runner se call hote the — kept for compat)
+async function lrLoadPyConfig(){ await adharLoadConfig(); }
+async function lrSavePyConfig(){ await adharSaveConfig(); }
+
+// ═══════════════════════════════════════════════════════════
+// 👾 AADHAAR BOT JAVASCRIPT (Separate Section)
+// ═══════════════════════════════════════════════════════════
+const _abElMap={
+  'ab-token':'py_bot_token','ab-proxy':'py_uidai_proxy',
+  'ab-fetch-cmd':'py_fetch_cmd','ab-cancel-cmd':'py_cancel_cmd','ab-refresh-cmd':'py_refresh_cmd',
+  'ab-start-msg':'py_start_msg','ab-loading-steps':'py_loading_steps','ab-otp-steps':'py_otp_steps',
+  'ab-captcha-msg':'py_captcha_msg','ab-otp-msg':'py_otp_msg',
+  'ab-success-msg':'py_success_msg','ab-cancel-msg':'py_cancel_msg','ab-error-prefix':'py_error_prefix',
+};
+
+function adharBotInit(){ adharLoadConfig(); adharLoadLogs(); adharLoadSessions(); adharCheckBotInfo(); }
+
+async function adharLoadConfig(){
+  const r=await api('lr_get_py_config');if(!r.ok){toast('Config load failed','error');return;}
+  const d=r.data||{};
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=d[key]||'';});
+}
+
+async function adharSaveConfig(){
+  const payload={};
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)payload[key]=el.value;});
+  const r=await api('lr_save_py_config',payload);
+  const res=g('ab-save-result');
+  if(r.ok){
+    toast('✅ Aadhaar Bot config saved!','success');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved! <code>bot_config.json</code> updated.</span>';}
+    adharLoadLogs();
+  }else{
+    toast('Error: '+(r.error||''),'error');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Save failed')+'</span>';}
+  }
+}
+
+async function adharSaveSection(section){
+  // Save only specific section fields
+  const sectionMap={
+    credentials:['ab-token','ab-proxy','ab-fetch-cmd','ab-cancel-cmd','ab-refresh-cmd'],
+    messages:['ab-start-msg','ab-captcha-msg','ab-otp-msg','ab-success-msg','ab-cancel-msg','ab-error-prefix'],
+    loading:['ab-loading-steps','ab-otp-steps'],
+  };
+  const resultIds={credentials:'ab-cred-result',messages:'ab-msg-result',loading:'ab-load-result'};
+  const fields=sectionMap[section]||[];
+  const payload={};
+  fields.forEach(elId=>{const key=_abElMap[elId];const el=g(elId);if(key&&el)payload[key]=el.value;});
+  const r=await api('lr_save_py_config',payload);
+  const res=g(resultIds[section]);
+  if(r.ok){
+    toast('✅ '+section.charAt(0).toUpperCase()+section.slice(1)+' saved!','success');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved!</span>';}
+    adharLoadLogs();
+  }else{
+    toast('❌ Save failed','error');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Failed')+'</span>';}
+  }
+}
+
+// ── Aadhaar Bot — Webhook ─────────────────────────────────
+async function adharSetWebhook(){
+  const tok=g('ab-token')?.value.trim();
+  toast('Setting webhook...','info');
+  const r=await api('ab_set_webhook',{token:tok||''});
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  card.style.display='block';title.textContent='🔗 Webhook Status';
+  if(r.ok){
+    toast('✅ Webhook set!','success');
+    body.innerHTML=`<div style="font-size:12px;line-height:2">
+      <span style="color:var(--g)">✅ Webhook set successfully!</span><br>
+      <b>URL:</b> <code style="color:#63b3ed;word-break:break-all">${r.webhook_url||''}</code><br>
+      <b>TG Response:</b> <code style="font-size:11px">${JSON.stringify(r.tg||{})}</code>
+    </div>`;
+  }else{
+    toast('❌ '+(r.error||r.tg?.description||'Failed'),'error');
+    body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ ${r.error||JSON.stringify(r.tg||{})}</div>`;
+  }
+}
+
+async function adharRemoveWebhook(){
+  const r=await api('ab_remove_webhook');
+  r.ok?toast('Webhook removed','info'):toast('Error: '+(r.error||''),'error');
+}
+
+// ── Aadhaar Bot — Bot Info / Status ──────────────────────
+async function adharCheckBotInfo(){
+  toast('Checking bot status...','info');
+  const r=await api('ab_bot_info');
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  card.style.display='block';title.textContent='🔍 Bot Status';
+  if(!r.ok){body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ ${r.error||'Token not set ya invalid'}</div>`;toast('❌ '+(r.error||''),'error');return;}
+  const me=r.me||{};const wh=r.webhook||{};
+  const whOk=!!(wh.url);
+  body.innerHTML=`<div style="font-size:12px;line-height:2.2">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:var(--s2);padding:10px;border-radius:8px">
+      <span style="font-size:28px">🤖</span>
+      <div>
+        <div style="font-weight:700;color:var(--t)">${me.first_name||'Unknown'} <span style="color:var(--td);font-weight:400">@${me.username||'?'}</span></div>
+        <div style="font-size:11px;color:var(--td)">ID: <code>${me.id||'?'}</code></div>
+      </div>
+      <span style="margin-left:auto;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;${whOk?'background:rgba(57,255,20,.15);color:var(--g);border:1px solid rgba(57,255,20,.3)':'background:rgba(255,45,85,.15);color:var(--r);border:1px solid rgba(255,45,85,.3)'}">${whOk?'🟢 ONLINE':'🔴 OFFLINE'}</span>
+    </div>
+    <b>Webhook URL:</b> <code style="font-size:11px;color:${whOk?'var(--g)':'var(--r)'};word-break:break-all">${wh.url||'Not set'}</code><br>
+    <b>Pending Updates:</b> <code>${wh.pending_update_count??0}</code><br>
+    ${wh.last_error_message?`<b style="color:var(--r)">Last Error:</b> <code style="color:var(--r)">${wh.last_error_message}</code><br>`:''}
+    <b>Bot can join groups:</b> ${me.can_join_groups?'✅':'❌'}<br>
+    <b>Can read all messages:</b> ${me.can_read_all_group_messages?'✅':'❌'}
+  </div>`;
+  toast('✅ Bot info loaded','success');
+}
+
+// ── Aadhaar Bot — Test Message ────────────────────────────
+async function adharSendTestMsg(){
+  const cid=g('ab-test-chat')?.value.trim();
+  const txt=g('ab-test-text')?.value.trim();
+  if(!cid){toast('Chat ID dalo pehle','error');return;}
+  toast('Sending...','info');
+  const r=await api('ab_send_test',{chat_id:cid,text:txt});
+  const res=g('ab-test-result');
+  if(res){res.style.display='block';}
+  if(r.ok){
+    toast('✅ Message sent!','success');
+    if(res)res.innerHTML='<span style="color:var(--g)">✅ Message successfully sent to <code>'+cid+'</code></span>';
+  }else{
+    toast('❌ '+(r.tg?.description||r.error||'Failed'),'error');
+    if(res)res.innerHTML='<span style="color:var(--r)">❌ '+(r.tg?.description||r.error||'Send failed')+'</span>';
+  }
+}
+
+// ── Aadhaar Bot — Sessions ────────────────────────────────
+async function adharLoadSessions(){
+  const r=await api('ab_get_sessions');
+  const card=g('ab-status-card');const body=g('ab-status-body');const title=g('ab-status-title');
+  const sessBody=g('ab-sessions-body');
+  if(!r.ok){if(sessBody)sessBody.innerHTML='<div style="color:var(--r);font-size:12px">Error loading sessions</div>';return;}
+  const sessions=r.sessions||{};const total=r.total||0;
+  if(total===0){if(sessBody)sessBody.innerHTML='<div style="color:var(--g);font-size:12px;text-align:center;padding:12px">✅ Koi active session nahi hai.</div>';return;}
+  let rows='';
+  Object.entries(sessions).forEach(([cid,sess])=>{
+    const step=sess.step??0;const total2=sess.fields?.length??0;
+    const linkId=sess.link_id||'?';
+    const answers=Object.entries(sess.answers||{}).map(([k,v])=>`<b>${k}:</b> ${v}`).join(' | ')||'—';
+    rows+=`<tr>
+      <td style="font-family:monospace;font-size:11px">${cid}</td>
+      <td><code style="font-size:11px">${linkId}</code></td>
+      <td style="color:var(--c)">${step}/${total2}</td>
+      <td style="font-size:11px;color:var(--td)">${answers}</td>
+      <td><button class="btn bd bsm" onclick="adharDeleteSession('${cid}')">🗑️</button></td>
+    </tr>`;
+  });
+  if(sessBody)sessBody.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--td)">Active Sessions: <b style="color:#63b3ed">${total}</b></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Link</th><th>Step</th><th>Answers</th><th>Del</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  toast('Sessions loaded','info');
+}
+
+async function adharDeleteSession(cid){
+  const r=await api('ab_delete_session',{chat_id:cid});
+  r.ok?toast('Session deleted: '+cid,'info'):toast('Error','error');
+  adharLoadSessions();
+}
+
+async function adharClearSessions(){
+  if(!confirm('Sab active sessions clear karein?'))return;
+  const r=await api('ab_clear_sessions');
+  r.ok?toast('✅ All sessions cleared','success'):toast('Error','error');
+  const sb=g('ab-sessions-body');if(sb)sb.innerHTML='<div style="color:var(--g);font-size:12px;text-align:center;padding:12px">✅ All sessions cleared.</div>';
+}
+
+// ── Aadhaar Bot — Logs ────────────────────────────────────
+async function adharLoadLogs(){
+  const r=await api('ab_get_logs');const box=g('ab-log-box');if(!box)return;
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function adharClearLogs(){
+  if(!confirm('Sab logs delete karein?'))return;
+  await api('ab_clear_logs');adharLoadLogs();toast('Logs cleared','info');
+}
+
+async function adharResetDefaults(){
+  if(!confirm('Sab default values restore karein?'))return;
+  const defaults={
+    py_bot_token:'',py_uidai_proxy:'',
+    py_fetch_cmd:'/fetch',py_cancel_cmd:'/cancel',py_refresh_cmd:'/refresh',
+    py_start_msg:"👾 <b>Aadhaar Retrieve Bot</b> — Online ✅\n\n📌 <b>Command:</b>\n<code>/fetch <mobile> <fullname></code>\n\nExample:\n<code>/fetch 9876543210 Ravi Kumar</code>",
+    py_loading_steps:"🔐 Secure tunnel initialize ho raha hai...\n🛰️ UIDAI node se connect ho raha hai...\n🧬 Session payload inject ho raha hai...\n🔍 Biometric endpoint resolve ho raha hai...\n⚡ Sandbox bypass ho raha hai...\n🗝️ Identity matrix decrypt ho rahi hai...\n📋 Form fill ho raha hai...\n📸 Captcha capture ho raha hai...",
+    py_otp_steps:"🔐 OTP token validate ho raha hai...\n🧬 Biometric hash cross-reference ho raha hai...\n📂 Encrypted Aadhaar file locate ho rahi hai...\n⬇️ Document decrypt aur package ho raha hai...\n✅ Document secured. Bhej raha hoon...",
+    py_captcha_msg:"📸 <b>Captcha ready hai!</b>\n\nNeeche captcha image dekho aur <b>text reply karo.</b>\n<i>/refresh = naya captcha | /cancel = band karo</i>",
+    py_otp_msg:"📲 <b>OTP bheja gaya!</b>\n📱 <code>{mobile}</code> pe OTP aaya hoga.\n\n🔢 <b>OTP reply karo:</b>\n<i>/cancel = band karo</i>",
+    py_success_msg:"✅ <b>Aadhaar document ready!</b>\n🔒 <i>Yeh file sirf aapke liye hai. Safely store karo.</i>",
+    py_cancel_msg:"❌ <b>Process cancel kar diya.</b>\nDobara shuru karne ke liye /fetch karo.",
+    py_error_prefix:"❌ <b>Error:</b>",
+  };
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=defaults[key]||'';});
+  toast('Defaults restored! Save karo apply karne ke liye.','info');
+}
+
+// ─── Python Adhar Debugger ────────────────────────────────
+function lrTogglePyDebugger(){
+  const d=g('lr-py-debugger');
+  if(d) d.style.display=d.style.display==='none'?'block':'none';
+}
+
+async function lrParsePython(){
+  const code=g('lr-py-input')?.value||'';
+  if(!code.trim()){toast('Python code paste karo pehle','error');return;}
+  toast('Parsing Python...','info');
+  const r=await api('parse_python',{python:code});
+  const resBox=g('lr-py-result');
+  if(!r.ok||!r.parsed){
+    toast('Parse failed — check Python format','error');
+    if(resBox){resBox.style.display='block';resBox.innerHTML='<span style="color:var(--r)">❌ Could not parse. Make sure it is a valid requests.get/post/put/delete snippet.</span>';}
+    return;
+  }
+  const p=r.parsed;
+  // Build a new link from parsed data
+  const id='py_'+Date.now();
+  const newLink={
+    id,
+    name: 'Python Import '+(new Date().toLocaleTimeString()),
+    enabled: true,
+    url: p.url||'',
+    method: p.method||'GET',
+    headers: p.headers_str||'',
+    body: p.body||'',
+    timeout: 30,
+    ssl_verify: true,
+    response_path: '',
+    reply_template: '📌 <b>{name}</b>\n\n{response}',
+    error_message: '⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',
+    send_on_error: false,
+    chat_id: '',
+    screenshot_mode: false,
+    screenshot_caption: '📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}',
+  };
+  _lrLinks.push(newLink);
+  lrRenderLinks();
+  // Scroll to new link
+  const c=g('lr-links-container');if(c)c.lastElementChild?.scrollIntoView({behavior:'smooth'});
+
+  const parts=[];
+  if(p.url)parts.push('✅ URL: <code>'+lrEsc(p.url.slice(0,60))+(p.url.length>60?'...':'')+'</code>');
+  if(p.method&&p.method!=='GET')parts.push('✅ Method: <b>'+lrEsc(p.method)+'</b>');
+  if(p.headers_str)parts.push('✅ Headers: '+p.headers_str.split('\n').length+' line(s)');
+  if(p.body)parts.push('✅ Body extracted');
+
+  if(resBox){
+    resBox.style.display='block';
+    resBox.innerHTML='<b style="color:var(--g)">✅ Import Successful! New link added.</b><br><br>'+parts.join('<br>');
+  }
+  toast('✅ Python imported as new link! Click 💾 Save All.','success');
+}
+
+async function lrParsePythonDebug(){
+  const code=g('lr-py-input')?.value||'';
+  if(!code.trim()){toast('Python code paste karo pehle','error');return;}
+  toast('Parsing...','info');
+  const r=await api('parse_python',{python:code});
+  const resBox=g('lr-py-result');
+  if(!r.ok||!r.parsed){
+    if(resBox){resBox.style.display='block';resBox.innerHTML='<span style="color:var(--r)">❌ Parse failed</span>';}
+    return;
+  }
+  const p=r.parsed;
+  if(resBox){
+    resBox.style.display='block';
+    resBox.innerHTML=
+      '<b style="color:#bf5af2">🐍 Parsed Result:</b><br><br>'+
+      '<b>Method:</b> <span style="color:var(--g)">'+(p.method||'GET')+'</span><br>'+
+      '<b>URL:</b> <code style="color:var(--c);word-break:break-all">'+(lrEsc(p.url)||'<span style="color:var(--r)">NOT FOUND</span>')+'</code><br><br>'+
+      '<b>Headers:</b><br><pre style="color:var(--td);font-size:11px;white-space:pre-wrap;margin-top:4px">'+(lrEsc(p.headers_str)||'(none)')+'</pre>'+
+      '<b>Body:</b><br><pre style="color:var(--td);font-size:11px;white-space:pre-wrap;margin-top:4px">'+(lrEsc(p.body)||'(none)')+'</pre>';
+  }
+  toast('Debug complete — result below','success');
 }
 </script></body></html>
