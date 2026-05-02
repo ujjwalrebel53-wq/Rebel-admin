@@ -443,16 +443,31 @@ define('LR_CONFIG_FILE', __DIR__ . '/lr_config.json');
 define('LR_LOG_FILE',    __DIR__ . '/lr_logs.json');
 define('LR_SS_DIR',      __DIR__ . '/lr_screenshots/');
 define('LR_CURL_TO',     30);
+define('LR_SESSION_FILE',__DIR__ . '/lr_sessions.json');
 if(!is_dir(LR_SS_DIR))@mkdir(LR_SS_DIR,0755,true);
 
 $_lrDefaultConfig=[
-    'run_secret'    => 'changeme123',
-    'bot_token'     => '',
-    'chat_id'       => '',
-    'send_prefix'   => '🔗 <b>Link Runner</b>\n\n',
-    'links'         => [],
-    'webhook_token' => '',
-    'webhook_cmd'   => '/run',
+    'run_secret'        => 'changeme123',
+    'bot_token'         => '',
+    'chat_id'           => '',
+    'send_prefix'       => '🔗 <b>Link Runner</b>\n\n',
+    'links'             => [],
+    'webhook_token'     => '',
+    'webhook_cmd'       => '/run',
+    // ── Python Aadhaar Bot config ──
+    'py_bot_token'      => '',
+    'py_uidai_proxy'    => '',
+    'py_fetch_cmd'      => '/fetch',
+    'py_cancel_cmd'     => '/cancel',
+    'py_refresh_cmd'    => '/refresh',
+    'py_start_msg'      => "👾 <b>Aadhaar Retrieve Bot</b> — Online ✅\n\n📌 <b>Command:</b>\n<code>/fetch &lt;mobile&gt; &lt;fullname&gt;</code>\n\nExample:\n<code>/fetch 9876543210 Ravi Kumar</code>",
+    'py_loading_steps'  => "🔐 Secure tunnel initialize ho raha hai...\n🛰️ UIDAI node se connect ho raha hai...\n🧬 Session payload inject ho raha hai...\n🔍 Biometric endpoint resolve ho raha hai...\n⚡ Sandbox bypass ho raha hai...\n🗝️ Identity matrix decrypt ho rahi hai...\n📋 Form fill ho raha hai...\n📸 Captcha capture ho raha hai...",
+    'py_otp_steps'      => "🔐 OTP token validate ho raha hai...\n🧬 Biometric hash cross-reference ho raha hai...\n📂 Encrypted Aadhaar file locate ho rahi hai...\n⬇️ Document decrypt aur package ho raha hai...\n✅ Document secured. Bhej raha hoon...",
+    'py_captcha_msg'    => "📸 <b>Captcha ready hai!</b>\n\nNeeche captcha image dekho aur <b>text reply karo.</b>\n<i>/refresh = naya captcha | /cancel = band karo</i>",
+    'py_otp_msg'        => "📲 <b>OTP bheja gaya!</b>\n📱 <code>{mobile}</code> pe OTP aaya hoga.\n\n🔢 <b>OTP reply karo:</b>\n<i>/cancel = band karo</i>",
+    'py_success_msg'    => "✅ <b>Aadhaar document ready!</b>\n🔒 <i>Yeh file sirf aapke liye hai. Safely store karo.</i>",
+    'py_cancel_msg'     => "❌ <b>Process cancel kar diya.</b>\nDobara shuru karne ke liye /fetch karo.",
+    'py_error_prefix'   => "❌ <b>Error:</b>",
 ];
 function lrLoadConfig(){
     global $_lrDefaultConfig;
@@ -481,6 +496,29 @@ function lrFetch($url,$method='GET',$headers='',$body='',$timeout=30,$sslVerify=
 function lrJsonPath($data,$path){if(empty($path))return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;foreach(explode('.',$path) as $k){if(is_array($data)&&isset($data[$k]))$data=$data[$k];elseif(is_array($data)&&is_numeric($k)&&isset($data[(int)$k]))$data=$data[(int)$k];else return null;}return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;}
 function lrFlatten($data,$prefix='',$map=[]){if(!is_array($data)){if($prefix!=='')$map[$prefix]=(string)$data;return $map;}foreach($data as $k=>$v){$full=$prefix!==''?$prefix.'.'.$k:(string)$k;if(is_array($v))$map=lrFlatten($v,$full,$map);else{$map[$full]=(string)$v;if(!isset($map[$k]))$map[$k]=(string)$v;}}return $map;}
 function lrReplace($text,$vars){foreach($vars as $k=>$v){$text=str_replace('{'.$k.'}',(string)$v,$text);}return $text;}
+
+// ─── Auto-detect form fields from HTML page ──────────────────────────────
+function lrDetectFormFields($pageUrl,$timeout=20){
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$pageUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',CURLOPT_HTTPHEADER=>['Accept-Language: en-US,en;q=0.9']]);
+    $html=curl_exec($ch);curl_close($ch);if(!$html)return[];
+    $fields=[];$skip=['hidden','submit','button','reset','image','file','checkbox','radio'];
+    preg_match_all('/<input([^>]*)>/i',$html,$inputs);
+    foreach($inputs[1] as $attrs){$type='';$name='';$ph='';$label='';if(preg_match('/type\s*=\s*["\']?([a-zA-Z]+)/i',$attrs,$m))$type=strtolower($m[1]);if(in_array($type,$skip))continue;if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/placeholder\s*=\s*["\']([^"\']+)/i',$attrs,$m))$ph=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$ph?:$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<textarea([^>]*)>/i',$html,$textareas);
+    foreach($textareas[1] as $attrs){$name='';$ph='';$label='';if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/placeholder\s*=\s*["\']([^"\']+)/i',$attrs,$m))$ph=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$ph?:$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<select([^>]*)>/i',$html,$selects);
+    foreach($selects[1] as $attrs){$name='';$label='';if(preg_match('/name\s*=\s*["\']([^"\']+)/i',$attrs,$m))$name=$m[1];if(preg_match('/aria-label\s*=\s*["\']([^"\']+)/i',$attrs,$m))$label=$m[1];$display=$label?:$name;if($display)$fields[$name?:$display]=$display;}
+    preg_match_all('/<label[^>]*for\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)<\/label>/is',$html,$labels);
+    foreach($labels[1] as $i=>$forId){$lt=trim(strip_tags($labels[2][$i]));if(!$lt)continue;preg_match_all('/<input[^>]*id\s*=\s*["\']'.preg_quote($forId,'/').'["\'][^>]*name\s*=\s*["\']([^"\']+)/i',$html,$nm);if(!empty($nm[1][0]))$fields[$nm[1][0]]=$lt;}
+    return $fields;
+}
+
+// ─── Form-fill session helpers ───────────────────────────────────────────
+function lrSessionLoad(){if(!file_exists(LR_SESSION_FILE))return[];return json_decode(file_get_contents(LR_SESSION_FILE),true)?:[];}
+function lrSessionSave($s){file_put_contents(LR_SESSION_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function lrSessionGet($cid){$a=lrSessionLoad();return $a[(string)$cid]??null;}
+function lrSessionSet($cid,$data){$a=lrSessionLoad();$a[(string)$cid]=$data;lrSessionSave($a);}
+function lrSessionDel($cid){$a=lrSessionLoad();unset($a[(string)$cid]);lrSessionSave($a);}
 
 function lrFetchScreenshotBytes($url,$timeout=30){
     $thumbUrl='https://image.thum.io/get/width/1280/crop/900/png/'.urlencode($url);
@@ -3957,8 +3995,76 @@ if(isset($_GET['lr_webhook'])){
     $lrUpdate=json_decode(file_get_contents('php://input'),true);
     if(!is_array($lrUpdate)){http_response_code(200);exit;}
     $lrMsg=$lrUpdate['message']??$lrUpdate['channel_post']??null;
-    if($lrMsg){$lrText=trim($lrMsg['text']??'');$lrChatId=$lrMsg['chat']['id']??'';$lrCmd=trim($lrCfg['webhook_cmd']??'/run');
-    if(str_starts_with(strtolower($lrText),strtolower($lrCmd))){lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⏳ Running links...','parse_mode'=>'HTML'],$lrWToken);$lrResults=lrRunAll($lrCfg,['tg_chat'=>$lrChatId]);$lrOk=count(array_filter($lrResults,fn($r)=>!$r['failed']));$lrTot=count($lrResults);lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✅ <b>Link Runner Done!</b>\n\n📊 Results: <code>{$lrOk}/{$lrTot}</code> success",'parse_mode'=>'HTML'],$lrWToken);}}
+    if($lrMsg){
+        $lrText=trim($lrMsg['text']??'');
+        $lrChatId=(string)($lrMsg['chat']['id']??'');
+        $lrCmd=trim($lrCfg['webhook_cmd']??'/run');
+
+        // ── Active form-fill session check ──────────────────
+        $lrSession=lrSessionGet($lrChatId);
+        if($lrSession){
+            if(strtolower($lrText)==='/cancel'){
+                lrSessionDel($lrChatId);
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'❌ Form fill cancelled.','parse_mode'=>'HTML'],$lrWToken);
+                http_response_code(200);exit;
+            }
+            $lrSession['answers'][$lrSession['fields'][$lrSession['step']]]=$lrText;
+            $lrSession['step']++;
+            lrSessionSet($lrChatId,$lrSession);
+            if($lrSession['step']<count($lrSession['fields'])){
+                $lrNextLabel=$lrSession['field_labels'][$lrSession['step']]??$lrSession['fields'][$lrSession['step']];
+                $lrTotal=count($lrSession['fields']);$lrCurr=$lrSession['step']+1;
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✏️ <b>".htmlspecialchars($lrNextLabel,ENT_QUOTES)."</b> dalo: <i>({$lrCurr}/{$lrTotal})</i>\n<i>(ya /cancel)</i>",'parse_mode'=>'HTML'],$lrWToken);
+                http_response_code(200);exit;
+            }
+            // All fields collected — find link and submit
+            $lrFormLink=null;foreach($lrCfg['links'] as $lk){if(($lk['id']??'')===$lrSession['link_id']){$lrFormLink=$lk;break;}}
+            if(!$lrFormLink){lrSessionDel($lrChatId);lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⚠️ Link config nahi mila.'],$lrWToken);http_response_code(200);exit;}
+            $lrVars=array_merge(['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')],$lrSession['answers']);
+            $lrFillUrl=lrReplace(trim($lrFormLink['url']??''),$lrVars);$lrFillH=lrReplace(trim($lrFormLink['headers']??''),$lrVars);$lrFillB=lrReplace(trim($lrFormLink['body']??''),$lrVars);
+            if(empty($lrFillB)&&strtoupper($lrFormLink['method']??'GET')==='POST'){$lrFillB=http_build_query($lrSession['answers']);if(empty($lrFillH))$lrFillH='Content-Type: application/x-www-form-urlencoded';}
+            $lrTo=max(5,min(120,(int)($lrFormLink['timeout']??30)));$lrSSL=!isset($lrFormLink['ssl_verify'])||(bool)$lrFormLink['ssl_verify'];
+            $lrFillRes=lrFetch($lrFillUrl,strtoupper($lrFormLink['method']??'POST'),$lrFillH,$lrFillB,$lrTo,$lrSSL);
+            lrSessionDel($lrChatId);
+            $lrOk2=$lrFillRes['code']>=200&&$lrFillRes['code']<400;
+            $lrSummary=$lrOk2?"✅ <b>Form submit ho gaya!</b>\nHTTP: <code>{$lrFillRes['code']}</code>":"⚠️ <b>Submit fail hua.</b>\nHTTP: <code>{$lrFillRes['code']}</code>\n<pre>".htmlspecialchars(mb_substr($lrFillRes['body']??'',0,300))."</pre>";
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>$lrSummary,'parse_mode'=>'HTML'],$lrWToken);
+            lrLog("Form fill [{$lrSession['link_id']}] → HTTP {$lrFillRes['code']}",$lrOk2?'success':'error');
+            http_response_code(200);exit;
+        }
+
+        // ── /fill command ────────────────────────────────────
+        if(str_starts_with(strtolower($lrText),'/fill')){
+            $lrParts=explode(' ',$lrText,2);$lrSearch=strtolower(trim($lrParts[1]??''));$lrFound=null;
+            foreach($lrCfg['links'] as $lk){if(!empty($lk['form_fill_mode'])&&(strtolower($lk['name']??'')===$lrSearch||strtolower($lk['id']??'')===$lrSearch||$lrSearch==='')){$lrFound=$lk;break;}}
+            if(!$lrFound){
+                $lrList=array_filter($lrCfg['links'],fn($l)=>!empty($l['form_fill_mode']));
+                if(empty($lrList))lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⚠️ Koi form-fill link configure nahi hai.','parse_mode'=>'HTML'],$lrWToken);
+                else{$lrNames=implode("\n",array_map(fn($l)=>"• <code>".htmlspecialchars($l['name'])."</code>",$lrList));lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"📋 Available forms:\n{$lrNames}\n\n/fill &lt;name&gt; likho",'parse_mode'=>'HTML'],$lrWToken);}
+                http_response_code(200);exit;
+            }
+            $lrManFields=array_values(array_filter(array_map('trim',explode(',',$lrFound['form_fields']??'')),fn($f)=>$f!==''));
+            if(!empty($lrManFields)){$lrFieldMap=[];foreach($lrManFields as $f)$lrFieldMap[$f]=$f;}
+            else{
+                lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'🔍 Site ke form fields detect ho rahe hain...','parse_mode'=>'HTML'],$lrWToken);
+                $lrPageUrl=lrReplace(trim($lrFound['url']??''),['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')]);
+                $lrFieldMap=lrDetectFormFields($lrPageUrl,20);
+                if(empty($lrFieldMap)){lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"⚠️ Auto-detect fail hua.\nAdmin panel mein <b>Form Fields</b> manually likho.",'parse_mode'=>'HTML'],$lrWToken);http_response_code(200);exit;}
+            }
+            $lrFN=array_keys($lrFieldMap);$lrFL=array_values($lrFieldMap);
+            lrSessionSet($lrChatId,['link_id'=>$lrFound['id'],'fields'=>$lrFN,'field_labels'=>$lrFL,'step'=>0,'answers'=>[]]);
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"📝 <b>".htmlspecialchars($lrFound['name'])."</b> form shuru!\n\n✏️ <b>".htmlspecialchars($lrFL[0])."</b> dalo:\n<i>(ya /cancel)</i>",'parse_mode'=>'HTML'],$lrWToken);
+            http_response_code(200);exit;
+        }
+
+        // ── Normal /run command ──────────────────────────────
+        if(str_starts_with(strtolower($lrText),strtolower($lrCmd))){
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⏳ Running links...','parse_mode'=>'HTML'],$lrWToken);
+            $lrResults=lrRunAll($lrCfg,['tg_chat'=>$lrChatId]);
+            $lrOk=count(array_filter($lrResults,fn($r)=>!$r['failed']));$lrTot=count($lrResults);
+            lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✅ <b>Link Runner Done!</b>\n\n📊 Results: <code>{$lrOk}/{$lrTot}</code> success",'parse_mode'=>'HTML'],$lrWToken);
+        }
+    }
     http_response_code(200);exit;
 }
 
@@ -4722,7 +4828,7 @@ if($page==='api'){
         case 'lr_save_config':
             $lrC=lrLoadConfig();foreach(['bot_token','chat_id','send_prefix','run_secret','webhook_token','webhook_cmd'] as $lk){if(isset($body[$lk]))$lrC[$lk]=trim($body[$lk]);}if(!empty($body['new_pass'])&&strlen(trim($body['new_pass']))>=4)$lrC['admin_pass']=trim($body['new_pass']);lrSaveConfig($lrC);lrLog('Config saved','info');jout(['ok'=>true]);break;
         case 'lr_save_links':
-            $lrC=lrLoadConfig();$lrLinks=[];foreach($body['links']??[] as $lk){$lrU=trim($lk['url']??'');if(!$lrU)continue;$lrLinks[]=['id'=>preg_replace('/[^a-zA-Z0-9_]/','_',$lk['id']??uniqid('l_')),'name'=>trim($lk['name']??'Link'),'enabled'=>(bool)($lk['enabled']??true),'url'=>$lrU,'method'=>strtoupper(trim($lk['method']??'GET')),'headers'=>trim($lk['headers']??''),'body'=>trim($lk['body']??''),'timeout'=>max(5,min(120,(int)($lk['timeout']??30))),'ssl_verify'=>!isset($lk['ssl_verify'])||(bool)$lk['ssl_verify'],'response_path'=>trim($lk['response_path']??''),'reply_template'=>trim($lk['reply_template']??'📌 <b>{name}</b>\n\n{response}'),'error_message'=>trim($lk['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>'),'send_on_error'=>(bool)($lk['send_on_error']??false),'chat_id'=>trim($lk['chat_id']??''),'screenshot_mode'=>(bool)($lk['screenshot_mode']??false),'screenshot_caption'=>trim($lk['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')];}$lrC['links']=$lrLinks;lrSaveConfig($lrC);lrLog('Links saved — '.count($lrLinks).' rule(s)','info');jout(['ok'=>true,'count'=>count($lrLinks)]);break;
+            $lrC=lrLoadConfig();$lrLinks=[];foreach($body['links']??[] as $lk){$lrU=trim($lk['url']??'');if(!$lrU)continue;$lrLinks[]=['id'=>preg_replace('/[^a-zA-Z0-9_]/','_',$lk['id']??uniqid('l_')),'name'=>trim($lk['name']??'Link'),'enabled'=>(bool)($lk['enabled']??true),'url'=>$lrU,'method'=>strtoupper(trim($lk['method']??'GET')),'headers'=>trim($lk['headers']??''),'body'=>trim($lk['body']??''),'timeout'=>max(5,min(120,(int)($lk['timeout']??30))),'ssl_verify'=>!isset($lk['ssl_verify'])||(bool)$lk['ssl_verify'],'response_path'=>trim($lk['response_path']??''),'reply_template'=>trim($lk['reply_template']??'📌 <b>{name}</b>\n\n{response}'),'error_message'=>trim($lk['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>'),'send_on_error'=>(bool)($lk['send_on_error']??false),'chat_id'=>trim($lk['chat_id']??''),'screenshot_mode'=>(bool)($lk['screenshot_mode']??false),'screenshot_caption'=>trim($lk['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}'),'form_fill_mode'=>(bool)($lk['form_fill_mode']??false),'form_fields'=>trim($lk['form_fields']??'')];}$lrC['links']=$lrLinks;lrSaveConfig($lrC);lrLog('Links saved — '.count($lrLinks).' rule(s)','info');jout(['ok'=>true,'count'=>count($lrLinks)]);break;
         case 'lr_run_now':
             $lrC=lrLoadConfig();$lrRes=lrRunAll($lrC);lrLog('Manual run — '.count($lrRes).' link(s)','info');jout(['ok'=>true,'results'=>$lrRes,'success'=>count(array_filter($lrRes,fn($r)=>!$r['failed']))]);break;
         case 'lr_run_single':
@@ -4739,6 +4845,21 @@ if($page==='api'){
             $lrLogs=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];jout(['ok'=>true,'data'=>array_slice($lrLogs,0,100)]);break;
         case 'lr_clear_logs':
             file_put_contents(LR_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
+        case 'lr_get_py_config':
+            $lrC2=lrLoadConfig();
+            $lrPyKeys=['py_bot_token','py_uidai_proxy','py_fetch_cmd','py_cancel_cmd','py_refresh_cmd','py_start_msg','py_loading_steps','py_otp_steps','py_captcha_msg','py_otp_msg','py_success_msg','py_cancel_msg','py_error_prefix'];
+            $lrPyOut=[];foreach($lrPyKeys as $k)$lrPyOut[$k]=$lrC2[$k]??'';
+            jout(['ok'=>true,'data'=>$lrPyOut]);break;
+
+        case 'lr_save_py_config':
+            $lrC2=lrLoadConfig();
+            $lrPyKeys=['py_bot_token','py_uidai_proxy','py_fetch_cmd','py_cancel_cmd','py_refresh_cmd','py_start_msg','py_loading_steps','py_otp_steps','py_captcha_msg','py_otp_msg','py_success_msg','py_cancel_msg','py_error_prefix'];
+            foreach($lrPyKeys as $k){if(isset($body[$k]))$lrC2[$k]=$body[$k];}
+            lrSaveConfig($lrC2);
+            $lrBotCfg=[];foreach($lrPyKeys as $k)$lrBotCfg[$k]=$lrC2[$k]??'';
+            file_put_contents(__DIR__.'/bot_config.json',json_encode($lrBotCfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);
+            lrLog('Python Aadhaar bot config saved','info');jout(['ok'=>true]);break;
 
         default:jout(['ok'=>false,'error'=>'Unknown action']);
     }
@@ -6991,6 +7112,48 @@ td{padding:9px 11px;vertical-align:middle;}
         <div class="fgrp"><label class="fl">🔒 Change Admin Password (min 4 chars)</label><input type="password" id="lr-newpass" class="fi" placeholder="Leave blank to keep current"></div>
       </div>
       <button class="btn bsu" onclick="lrSaveConfig()" style="width:100%;margin-top:8px">💾 Save Config</button>
+    </div>
+
+    <!-- Python Aadhaar Bot Config Card -->
+    <div class="card" style="border-color:rgba(99,179,237,.4)">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#63b3ed;font-size:14px">👾 PYTHON AADHAAR BOT CONFIG</div>
+          <div style="font-size:11px;color:var(--td);margin-top:3px">Python bot ke liye config — save hone pe <code>bot_config.json</code> banta hai</div>
+        </div>
+        <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="lrTogglePyCard()">▼ Show / Hide</button>
+      </div>
+      <div id="lr-pybot-body" style="display:none">
+        <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:8px;padding:10px;font-size:11px;color:var(--td);margin-bottom:12px;line-height:1.8">
+          💡 <b style="color:#63b3ed">Kaise kaam karta hai:</b><br>
+          Python bot yahan se config load karta hai — aapko bot restart nahi karna. Bas yahan save karo, Python bot automatically naya config use karega.<br>
+          <code style="color:#63b3ed">bot_config.json</code> file same folder mein ban jaati hai.
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">🤖 Bot Token (Python bot ka alag token)</label><input type="password" id="lr-py-token" class="fi" placeholder="123456:ABC..."></div>
+          <div class="fgrp"><label class="fl">🌐 UIDAI Proxy (optional, socks5://host:port)</label><input type="text" id="lr-py-proxy" class="fi" placeholder="socks5://127.0.0.1:1080"></div>
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">📟 Fetch Command</label><input type="text" id="lr-py-fetch-cmd" class="fi" placeholder="/fetch"></div>
+          <div class="fgrp"><label class="fl">❌ Cancel Command</label><input type="text" id="lr-py-cancel-cmd" class="fi" placeholder="/cancel"></div>
+          <div class="fgrp"><label class="fl">🔄 Refresh Command</label><input type="text" id="lr-py-refresh-cmd" class="fi" placeholder="/refresh"></div>
+        </div>
+        <div class="fgrp mb"><label class="fl">👋 Start Message</label><textarea id="lr-py-start-msg" class="fi fta" rows="4"></textarea></div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">⏳ Loading Steps (ek line = ek step)</label><textarea id="lr-py-loading-steps" class="fi fta" rows="8"></textarea></div>
+          <div class="fgrp"><label class="fl">🔐 OTP Loading Steps (ek line = ek step)</label><textarea id="lr-py-otp-steps" class="fi fta" rows="8"></textarea></div>
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">📸 Captcha Message</label><textarea id="lr-py-captcha-msg" class="fi fta" rows="3"></textarea></div>
+          <div class="fgrp"><label class="fl">📲 OTP Message ({mobile} placeholder)</label><textarea id="lr-py-otp-msg" class="fi fta" rows="3"></textarea></div>
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">✅ Success Message</label><textarea id="lr-py-success-msg" class="fi fta" rows="2"></textarea></div>
+          <div class="fgrp"><label class="fl">❌ Cancel Message</label><textarea id="lr-py-cancel-msg" class="fi fta" rows="2"></textarea></div>
+        </div>
+        <div class="fgrp mb"><label class="fl">⚠️ Error Prefix</label><input type="text" id="lr-py-error-prefix" class="fi" placeholder="❌ &lt;b&gt;Error:&lt;/b&gt;"></div>
+        <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid rgba(99,179,237,.4);width:100%" onclick="lrSavePyConfig()">💾 Save Python Bot Config</button>
+      </div>
     </div>
 
     <!-- Python Debugger Card -->
@@ -10053,7 +10216,7 @@ async function rbdClearLogs(){await api('rbd_clear_logs');rbdLoadLogs();toast('L
 // ═══════════════════════════════════════════════════════════
 let _lrLinks=[];let _lrLinkIdx=0;
 
-function lrInit(){ lrLoadConfig2(); lrLoadLogs(); }
+function lrInit(){ lrLoadConfig2(); lrLoadLogs(); lrLoadPyConfig(); }
 
 async function lrLoadConfig2(){
   const r=await api('lr_get_config');if(!r.ok)return;const d=r.data||{};
@@ -10144,6 +10307,21 @@ function lrBuildLinkEl(lk,i){
     <div class="fgrp mb"><label class="fl">📸 Screenshot Caption (HTML)</label><textarea id="lrssc_${lk.id}" class="fi fta" rows="2" onchange="lrSyncField('${lk.id}','screenshot_caption',this.value)">${lrEsc(lk.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')}</textarea><div style="font-size:10px;color:var(--td);margin-top:4px">Vars: {name} {url} {ts} {date} {time}</div></div>
     <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--g)">✅ <b>No browser install needed!</b> Free APIs use hoti hain (thum.io → microlink).</div>
   </div>
+  <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--b)">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrffm_${lk.id}" ${lk.form_fill_mode?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','form_fill_mode',this.checked);lrToggleFormFill('${lk.id}',this.checked)"><span style="font-size:12px">📋 Form Fill Mode (Bot user se form fields puchega)</span></label>
+  </div>
+  <div id="lrff_wrap_${lk.id}" style="${lk.form_fill_mode?'':'display:none'};margin-top:8px">
+    <div class="fgrp mb">
+      <label class="fl">📋 Form Fields (comma separated)</label>
+      <input type="text" id="lrff_${lk.id}" class="fi" value="${lrEsc(lk.form_fields||'')}" placeholder="username, password, email" onchange="lrSyncField('${lk.id}','form_fields',this.value)">
+      <div style="font-size:10px;color:var(--td);margin-top:4px">Khali chhodo = site se auto-detect. Ya manually: <code>username, password, email</code></div>
+    </div>
+    <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:6px;padding:8px 12px;font-size:11px;color:var(--td)">
+      📌 Bot pe <b>/fill ${lrEsc(lk.name||'link_name')}</b> command bhejo → bot har field puchega → reply karo → submit.<br>
+      URL: <code>https://site.com/login?user={username}&pass={password}</code><br>
+      Body: <code>username={username}&password={password}</code>
+    </div>
+  </div>
   <div id="lrresult_${lk.id}" style="margin-top:10px;display:none;background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;font-size:12px"></div>
 </div>`;
   div.querySelector('[onclick*="lrToggleCard"]')?.addEventListener('click',()=>{
@@ -10173,6 +10351,41 @@ async function lrLoadLogs(){
   box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
 }
 async function lrClearLogs(){await api('lr_clear_logs');lrLoadLogs();toast('Logs cleared','info');}
+
+// ─── Form Fill Mode toggle ────────────────────────────────
+function lrToggleFormFill(id,show){const w=g('lrff_wrap_'+id);if(w)w.style.display=show?'block':'none';}
+
+// ─── Python Aadhaar Bot Config ────────────────────────────
+function lrTogglePyCard(){
+  const b=g('lr-pybot-body');if(!b)return;
+  b.style.display=b.style.display==='none'?'block':'none';
+}
+
+async function lrLoadPyConfig(){
+  const r=await api('lr_get_py_config');if(!r.ok)return;const d=r.data||{};
+  const map={
+    'lr-py-token':'py_bot_token','lr-py-proxy':'py_uidai_proxy',
+    'lr-py-fetch-cmd':'py_fetch_cmd','lr-py-cancel-cmd':'py_cancel_cmd','lr-py-refresh-cmd':'py_refresh_cmd',
+    'lr-py-start-msg':'py_start_msg','lr-py-loading-steps':'py_loading_steps','lr-py-otp-steps':'py_otp_steps',
+    'lr-py-captcha-msg':'py_captcha_msg','lr-py-otp-msg':'py_otp_msg',
+    'lr-py-success-msg':'py_success_msg','lr-py-cancel-msg':'py_cancel_msg','lr-py-error-prefix':'py_error_prefix',
+  };
+  Object.entries(map).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=d[key]||'';});
+}
+
+async function lrSavePyConfig(){
+  const map={
+    'lr-py-token':'py_bot_token','lr-py-proxy':'py_uidai_proxy',
+    'lr-py-fetch-cmd':'py_fetch_cmd','lr-py-cancel-cmd':'py_cancel_cmd','lr-py-refresh-cmd':'py_refresh_cmd',
+    'lr-py-start-msg':'py_start_msg','lr-py-loading-steps':'py_loading_steps','lr-py-otp-steps':'py_otp_steps',
+    'lr-py-captcha-msg':'py_captcha_msg','lr-py-otp-msg':'py_otp_msg',
+    'lr-py-success-msg':'py_success_msg','lr-py-cancel-msg':'py_cancel_msg','lr-py-error-prefix':'py_error_prefix',
+  };
+  const payload={};
+  Object.entries(map).forEach(([elId,key])=>{const el=g(elId);if(el)payload[key]=el.value;});
+  const r=await api('lr_save_py_config',payload);
+  r.ok?toast('✅ Python bot config saved! bot_config.json updated.','success'):toast('Error: '+(r.error||''),'error');
+}
 
 // ─── Python Adhar Debugger ────────────────────────────────
 function lrTogglePyDebugger(){
