@@ -5007,6 +5007,7 @@ RENDER:
 :root{--bg:#030712;--s:#0d1117;--s2:#161b22;--s3:#1c2130;--c:#00f5ff;--g:#39ff14;--r:#ff2d55;--y:#ffd60a;--p:#bf5af2;--o:#ff9f0a;--b:rgba(0,245,255,.15);--t:#e6edf3;--td:#8b949e;--tf:#4a5568;}
 
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;margin:0;padding:0;}
 html{background:#030712;color-scheme:dark only;-webkit-text-size-adjust:100%;scroll-behavior:auto;}
 body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdhani',sans-serif;font-size:15px;width:100vw;overflow-x:hidden;min-height:100dvh;-webkit-font-smoothing:antialiased;}
 @media screen and (orientation:portrait){body{background:#030712!important;color:#e6edf3!important;}.fi,.fsel,.fta{background:#161b22!important;color:#e6edf3!important;}option{background:#161b22;color:#e6edf3;}}
@@ -5020,12 +5021,12 @@ body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdha
 .btn:active{transform:scale(.97);}
 .bp{background:var(--c);color:#000;}.bsu{background:var(--g);color:#000;}.bd{background:var(--r);color:#fff;}.bw{background:var(--y);color:#000;}.bg{background:transparent;color:var(--td);border:1px solid var(--b);}.bo{background:var(--o);color:#000;}
 .bsm{padding:5px 10px;font-size:11px;}
-.wrap{display:flex;min-height:100dvh;width:100%;overflow-x:hidden;}
+.wrap{display:flex;min-height:100vh;width:100%;overflow-x:hidden;position:relative;}
 .sb{width:240px;background:rgba(13,17,23,.99);border-right:1px solid var(--b);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10000;transition:transform .3s;overflow-y:auto;}
 .logo{display:flex;align-items:center;gap:12px;padding:18px 16px;border-bottom:1px solid var(--b);}
-.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);}
-.topbar{background:rgba(13,17,23,.95);border-bottom:1px solid var(--b);padding:0 18px;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;}
-.con{padding:18px;flex:1;overflow-x:hidden;}
+.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);min-height:100vh;}
+.topbar{background:rgba(13,17,23,.95);border-bottom:1px solid var(--b);padding:0 18px;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;flex-shrink:0;}
+.con{padding:18px;flex:1;overflow-x:hidden;padding-top:18px;}
 .panel{display:none;}.panel.active{display:block;}
 .card{background:var(--s);border:1px solid var(--b);border-radius:12px;padding:16px;margin-bottom:14px;width:100%;}
 .sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
@@ -5086,14 +5087,14 @@ td{padding:9px 11px;vertical-align:middle;}
 /* FIX indicator box */
 .fix-note{background:rgba(57,255,20,.05);border:1px solid rgba(57,255,20,.3);border-radius:8px;padding:10px 12px;font-family:'Share Tech Mono';font-size:11px;color:var(--g);margin-bottom:12px;line-height:1.8;}
 @media(max-width:768px){
-  html,body{background:#030712!important;width:100vw;}
+  html,body{background:#030712!important;width:100vw;height:auto!important;}
   .sb{transform:translateX(-100%);box-shadow:4px 0 20px rgba(0,0,0,.8);}
   .sb.open{transform:translateX(0);}
   .sov.open{display:block;}
-  .main{margin-left:0!important;width:100%!important;}
+  .main{margin-left:0!important;width:100%!important;min-height:100vh;}
   .ham{display:block;}
   .fg{grid-template-columns:1fr;}
-  .con{padding:10px;}
+  .con{padding:10px;padding-top:10px;}
   .card{padding:11px;}
   .br{flex-direction:column;align-items:stretch;}
   .br input,.br select,.br button,.br textarea{width:100%!important;min-width:0;}
@@ -7472,15 +7473,15 @@ function nav(id,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
-  // Force scroll to absolute top — use multiple methods for cross-browser support
-  document.documentElement.scrollTop=0;
-  document.body.scrollTop=0;
-  window.scrollTo(0,0);
-  requestAnimationFrame(()=>{
+  // Scroll to top immediately
+  const scrollToTop=()=>{
+    window.scrollTo(0,0);
     document.documentElement.scrollTop=0;
     document.body.scrollTop=0;
-    window.scrollTo(0,0);
-  });
+  };
+  scrollToTop();
+  requestAnimationFrame(scrollToTop);
+  setTimeout(scrollToTop,50);
   const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad,depositbot:rbdInit,linkrunner:lrInit,adharbot:adharBotInit};
   if(m[id])m[id]();
 }
