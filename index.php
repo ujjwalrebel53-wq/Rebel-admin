@@ -191,6 +191,355 @@ function sendDocument($chatId,$docUrl,$caption,$kb,$token){
     return tg('sendDocument',$p,$token);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ██████╗ ██████╗     ██████╗ ███████╗██████╗  ██████╗ ███████╗██╗████████╗
+// ██╔══██╗██╔══██╗    ██╔══██╗██╔════╝██╔══██╗██╔═══██╗██╔════╝██║╚══██╔══╝
+// ██████╔╝██████╔╝    ██║  ██║█████╗  ██████╔╝██║   ██║███████╗██║   ██║
+// ██╔══██╗██╔══██╗    ██║  ██║██╔══╝  ██╔═══╝ ██║   ██║╚════██║██║   ██║
+// ██║  ██║██████╔╝    ██████╔╝███████╗██║     ╚██████╔╝███████║██║   ██║
+//  ╚═╝  ╚═╝╚═════╝     ╚═════╝ ╚══════╝╚═╝      ╚═════╝ ╚══════╝╚═╝   ╚═╝
+// RockyBook Deposit Bot — Integrated Module
+// ═══════════════════════════════════════════════════════════════════════════
+define('RBD_VERSION',     '1.0');
+define('RBD_CONFIG_FILE', __DIR__ . '/rbd_config.json');
+define('RBD_LOG_FILE',    __DIR__ . '/rbd_logs.json');
+define('RBD_STATE_FILE',  __DIR__ . '/rbd_states.json');
+define('RBD_COOKIE_DIR',  __DIR__ . '/rbd_cookies/');
+define('RBD_QR_DIR',      __DIR__ . '/rbd_qr/');
+define('RBD_RATE_FILE',   __DIR__ . '/rbd_ratelimit.json');
+define('RBD_LEDGER_FILE', __DIR__ . '/rbd_ledger.json');
+define('RB_API_BASE',     'https://rockybook.vip/api');
+define('RBD_MIN_DEPOSIT', 500);
+define('RBD_BLOCK_MINUTES', 30);
+define('RBD_MAX_INCOMPLETE', 2);
+define('RBD_DEPOSIT_CLIENT', 'Ujjwal0999');
+define('RBD_WITHDRAWAL_CONTACT', '@Rebel_babyyy');
+if(!is_dir(RBD_COOKIE_DIR))@mkdir(RBD_COOKIE_DIR,0755,true);
+if(!is_dir(RBD_QR_DIR))@mkdir(RBD_QR_DIR,0755,true);
+
+$_rbdDefaultConfig=[
+    'admin_pass'     => 'rebel@2026',
+    'bot_token'      => '',
+    'admin_chat_id'  => '',
+    'rb_phone'       => '',
+    'rb_password'    => '',
+    'rb_branch'      => 'RBVIP1D',
+    'rb_bank_id'     => '',
+    'min_deposit'    => 500,
+    'max_deposit'    => 100000,
+    'welcome_msg'    => "🎯 <b>Rebel B2W</b>\n\nWelcome! Use /Deposit to make a deposit.\n\n💰 /Deposit — Deposit\n💸 /Withdrawal — Withdraw\n💳 /Balance — Balance\n❓ /Help — Help",
+    'deposit_thanks' => "✅ <b>Transaction Submitted!</b>\n\nAdmin will verify shortly.",
+];
+function rbdLoadConfig(){
+    global $_rbdDefaultConfig;
+    if(!file_exists(RBD_CONFIG_FILE))return$_rbdDefaultConfig;
+    $l=json_decode(file_get_contents(RBD_CONFIG_FILE),true);
+    return is_array($l)?array_merge($_rbdDefaultConfig,$l):$_rbdDefaultConfig;
+}
+function rbdSaveConfig($cfg){file_put_contents(RBD_CONFIG_FILE,json_encode($cfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdGetStates(){if(!file_exists(RBD_STATE_FILE))return[];return json_decode(file_get_contents(RBD_STATE_FILE),true)?:[];}
+function rbdSetState($cid,$state,$data=[]){$s=rbdGetStates();$s[(string)$cid]=['state'=>$state,'data'=>$data,'ts'=>time()];file_put_contents(RBD_STATE_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdGetState($cid){$s=rbdGetStates();$e=$s[(string)$cid]??null;if($e&&(time()-($e['ts']??0))>1800){rbdClearState($cid);return null;}return $e;}
+function rbdClearState($cid){$s=rbdGetStates();unset($s[(string)$cid]);file_put_contents(RBD_STATE_FILE,json_encode($s,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdRlLoad(){if(!file_exists(RBD_RATE_FILE))return[];return json_decode(file_get_contents(RBD_RATE_FILE),true)?:[];}
+function rbdRlSave($d){file_put_contents(RBD_RATE_FILE,json_encode($d,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdRlIsBlocked($cid){$rl=rbdRlLoad();$rec=$rl[(string)$cid]??null;if(!$rec)return false;if(!empty($rec['blocked_until'])&&time()<$rec['blocked_until'])return $rec['blocked_until'];return false;}
+function rbdRlStart($cid){$rl=rbdRlLoad();$k=(string)$cid;if(!isset($rl[$k]))$rl[$k]=['incomplete'=>0,'blocked_until'=>0,'last_start'=>0];$rl[$k]['incomplete']++;$rl[$k]['last_start']=time();if($rl[$k]['incomplete']>=RBD_MAX_INCOMPLETE){$rl[$k]['blocked_until']=time()+(RBD_BLOCK_MINUTES*60);$rl[$k]['incomplete']=0;rbdRlSave($rl);return false;}rbdRlSave($rl);return true;}
+function rbdRlCompleted($cid){$rl=rbdRlLoad();$k=(string)$cid;if(isset($rl[$k])){$rl[$k]['incomplete']=0;$rl[$k]['blocked_until']=0;}rbdRlSave($rl);}
+function rbdRlRemaining($until){$s=max(0,$until-time());return ceil($s/60).' minute'.(ceil($s/60)==1?'':'s');}
+
+function rbdLdLoad(){if(!file_exists(RBD_LEDGER_FILE))return[];return json_decode(file_get_contents(RBD_LEDGER_FILE),true)?:[];}
+function rbdLdSave($d){file_put_contents(RBD_LEDGER_FILE,json_encode($d,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+function rbdLdGetUser($cid){$ld=rbdLdLoad();return $ld[(string)$cid]??['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];}
+function rbdLdAddDeposit($cid,$amount,$utr,$txnId=null){$ld=rbdLdLoad();$k=(string)$cid;if(!isset($ld[$k]))$ld[$k]=['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];$ld[$k]['balance']+=(float)$amount;$ld[$k]['deposits'][]=['amount'=>(float)$amount,'utr'=>$utr,'txn_id'=>$txnId,'time'=>date('c'),'status'=>'approved'];rbdLdSave($ld);}
+function rbdLdAddWithdrawal($cid,$amount){$ld=rbdLdLoad();$k=(string)$cid;if(!isset($ld[$k]))$ld[$k]=['chat_id'=>$cid,'balance'=>0,'deposits'=>[],'withdrawals'=>[]];$ld[$k]['withdrawals'][]=['amount'=>(float)$amount,'time'=>date('c'),'status'=>'pending'];rbdLdSave($ld);}
+
+function rbdLog($text,$type='info'){$l=file_exists(RBD_LOG_FILE)?(json_decode(file_get_contents(RBD_LOG_FILE),true)?:[]):[];array_unshift($l,['time'=>date('c'),'text'=>$text,'type'=>$type]);if(count($l)>500)$l=array_slice($l,0,500);file_put_contents(RBD_LOG_FILE,json_encode($l,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function rbdTgSend($token,$cid,$text,$kb=null){$p=['chat_id'=>$cid,'text'=>$text,'parse_mode'=>'HTML','disable_web_page_preview'=>true];if($kb)$p['reply_markup']=json_encode($kb);return tg('sendMessage',$p,$token);}
+function rbdTgSendPhoto($token,$cid,$photoPath,$caption='',$kb=null){$ch=curl_init();$f=['chat_id'=>$cid,'caption'=>$caption,'parse_mode'=>'HTML','photo'=>new CURLFile($photoPath,'image/png','qr.png')];if($kb)$f['reply_markup']=json_encode($kb);curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>40,CURLOPT_POSTFIELDS=>$f]);$r=json_decode(curl_exec($ch),true);curl_close($ch);return $r;}
+
+function rbdApi($endpoint,$method='GET',$data=null,$cookieFile=null){
+    $url=RB_API_BASE.$endpoint;$cf=$cookieFile?:(RBD_COOKIE_DIR.'admin.txt');
+    $headers=['Content-Type: application/json','Accept: application/json','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36','Origin: https://rockybook.vip','Referer: https://rockybook.vip/'];
+    $ch=curl_init();$opts=[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>30,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_HTTPHEADER=>$headers,CURLOPT_COOKIEJAR=>$cf,CURLOPT_COOKIEFILE=>$cf];
+    $m=strtoupper($method);if($m==='POST'){$opts[CURLOPT_POST]=true;$opts[CURLOPT_POSTFIELDS]=$data!==null?json_encode($data):'{}';}elseif(in_array($m,['PUT','PATCH','DELETE'])){$opts[CURLOPT_CUSTOMREQUEST]=$m;if($data!==null)$opts[CURLOPT_POSTFIELDS]=json_encode($data);}
+    curl_setopt_array($ch,$opts);$raw=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+    return['code'=>$code,'raw'=>$raw?:'','data'=>json_decode($raw,true),'error'=>$err,'ok'=>$code>=200&&$code<300];
+}
+
+function rbdAdminLogin($cfg){
+    $cf=RBD_COOKIE_DIR.'admin.txt';
+    $check=rbdApi('/auth/fetchUserByToken','GET',null,$cf);
+    if($check['ok']&&isset($check['data']['user']))return $check['data']['user'];
+    $phone=trim($cfg['rb_phone']??'');$pass=trim($cfg['rb_password']??'');
+    if(!$phone||!$pass)return false;
+    $res=rbdApi('/auth/login','POST',['loginType'=>$phone,'password'=>$pass],$cf);
+    if(!$res['ok']||empty($res['data']))return false;
+    $d=$res['data'];return $d['user']??$d['data']??((!empty($d['success']))?$d:false);
+}
+
+function rbdGetAdminUser($cfg){
+    $cf=RBD_COOKIE_DIR.'admin_user.json';
+    if(file_exists($cf)&&(time()-filemtime($cf))<3600){$c=json_decode(file_get_contents($cf),true);if($c&&isset($c['_id']))return $c;}
+    $u=rbdAdminLogin($cfg);if($u&&is_array($u))file_put_contents($cf,json_encode($u,JSON_UNESCAPED_UNICODE),LOCK_EX);return $u;
+}
+
+function rbdGetDepositUserId($cfg){
+    $cf=RBD_COOKIE_DIR.'deposit_user.json';
+    if(file_exists($cf)&&(time()-filemtime($cf))<86400){$c=json_decode(file_get_contents($cf),true);if(!empty($c['_id']))return $c;}
+    $cn=RBD_DEPOSIT_CLIENT;$res=rbdApi('/user/getUsers?page=1&limit=100000');
+    if($res['ok']){$users=$res['data']['users']??$res['data']['data']??[];if(is_array($users)){foreach($users as $u){if(strtolower($u['clientName']??'')===strtolower($cn)){$found=['_id'=>$u['_id']??$u['id'],'clientName'=>$u['clientName']];file_put_contents($cf,json_encode($found,JSON_UNESCAPED_UNICODE),LOCK_EX);return $found;}}}}
+    rbdLog("Deposit user '{$cn}' not found — using admin as fallback",'error');return rbdGetAdminUser($cfg);
+}
+
+function rbdNormalizeBank($b){
+    if(!is_array($b)||empty($b))return null;
+    $n=['upiId'=>$b['upiId']??$b['upi']??$b['vpa']??null,'accNo'=>$b['accNo']??$b['accountNo']??$b['accountNumber']??$b['account_no']??null,'ifscCode'=>$b['ifscCode']??$b['ifsc']??$b['IFSC']??null,'bankName'=>$b['bankName']??$b['bank']??$b['bank_name']??null,'accHolderName'=>$b['accHolderName']??$b['holderName']??$b['accountHolder']??$b['name']??null,'isActive'=>$b['isActive']??true];
+    if($n['upiId']||$n['accNo']||$n['ifscCode'])return $n;return null;
+}
+
+function rbdGetBankDetails($cfg,$amount=500){
+    $branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://www.powerdreams.co/api/online/request/fetchAvailablePeer',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_HTTPHEADER=>['Content-Type: application/json','Accept: application/json','Origin: https://www.powerdreams.co','Referer: https://www.powerdreams.co/online/pay/'.$branch.'/test','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36'],CURLOPT_POSTFIELDS=>json_encode(['transactionType'=>'Deposit','branchUserName'=>$branch,'amount'=>(int)$amount])]);
+    $raw=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+    $data=json_decode($raw,true);rbdLog("fetchAvailablePeer HTTP={$code} branch={$branch} amount={$amount}",'info');
+    if(empty($data['success'])||empty($data['bankDetails'])){rbdLog("fetchAvailablePeer failed: ".($data['message']??'no bankDetails'),'error');return null;}
+    return rbdNormalizeBank($data['bankDetails']);
+}
+
+function rbdCreateDeposit($cfg,$userId,$amount,$mode='PowerPay'){
+    $branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $payload=['userId'=>$userId,'amount'=>(float)$amount,'transactionType'=>'Deposit','role'=>'User','mode'=>$mode,'branchUserName'=>$branch];
+    $res=rbdApi('/transaction/createTransaction','POST',$payload);if(!$res['ok'])return null;
+    $d=$res['data'];if(!empty($d['success'])&&isset($d['data']))return $d['data'];return $d;
+}
+
+function rbdFetchImage($url,$timeout=25){
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36']);
+    $data=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);
+    if($code===200&&$data&&strlen($data)>500)return $data;return null;
+}
+
+function rbdScreenshotUrl($url,$outputFile,$timeout=35){
+    $enc=urlencode($url);
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>"https://api.microlink.io/?url={$enc}&screenshot=true&meta=false&embed=screenshot.url&timeout=20000",CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_USERAGENT=>'Mozilla/5.0']);
+    $ml=json_decode(curl_exec($ch),true);curl_close($ch);
+    $ssUrl=$ml['data']['screenshot']['url']??$ml['data']['screenshot']??null;
+    if($ssUrl&&strncmp($ssUrl,'http',4)===0){$d=rbdFetchImage($ssUrl,20);if($d&&strlen($d)>500){file_put_contents($outputFile,$d);return 'microlink';}}
+    $d2=rbdFetchImage("https://image.thum.io/get/width/800/crop/1200/png/{$enc}",20);
+    if($d2&&strlen($d2)>500){file_put_contents($outputFile,$d2);return 'thum.io';}
+    return null;
+}
+
+function rbdFetchRealQR($txnId,$branch,$outputFile,$timeout=35){
+    $res=rbdApi("/transaction/fetch_powerPay_transaction_screenshot/{$txnId}");
+    if($res['ok']&&!empty($res['data'])){$d=$res['data'];$imgData=$d['screenshot']??$d['image']??$d['data']??$d['url']??$d['screenshotUrl']??null;if($imgData){if(strncmp($imgData,'data:image',10)===0){$bytes=base64_decode(preg_replace('/^data:image\/\w+;base64,/','',$imgData));if($bytes&&strlen($bytes)>500){file_put_contents($outputFile,$bytes);return 'rockybook-api';}}elseif(strncmp($imgData,'http',4)===0){$bytes=rbdFetchImage($imgData,20);if($bytes&&strlen($bytes)>500){file_put_contents($outputFile,$bytes);return 'rockybook-api-url';}}}}
+    $payUrl="https://www.powerdreams.co/online/pay/{$branch}/{$txnId}";$src=rbdScreenshotUrl($payUrl,$outputFile,$timeout);if($src)return "payment-page-{$src}";return null;
+}
+
+function rbdHandleDeposit($token,$cid,$userName,$cfg){
+    $blocked=rbdRlIsBlocked($cid);
+    if($blocked){rbdTgSend($token,$cid,"🚫 <b>Temporarily Restricted</b>\n\nYou started a deposit without completing it.\n⏳ Please wait <b>".rbdRlRemaining($blocked)."</b> before trying again.");return;}
+    $minDep=(int)($cfg['min_deposit']??RBD_MIN_DEPOSIT);$maxDep=(int)($cfg['max_deposit']??100000);
+    rbdTgSend($token,$cid,"💰 <b>Deposit Amount</b>\n\nMinimum: <b>₹".number_format($minDep)."</b>\nMaximum: <b>₹".number_format($maxDep)."</b>\n\n<i>Enter amount (e.g. 1000)</i>",['inline_keyboard'=>[[['text'=>'₹500','callback_data'=>'rbdamt_500'],['text'=>'₹1000','callback_data'=>'rbdamt_1000'],['text'=>'₹2000','callback_data'=>'rbdamt_2000']],[['text'=>'₹5000','callback_data'=>'rbdamt_5000'],['text'=>'₹10000','callback_data'=>'rbdamt_10000'],['text'=>'₹25000','callback_data'=>'rbdamt_25000']]]]);
+    rbdSetState($cid,'awaiting_amount',[]);
+}
+
+function rbdProcessAmount($token,$cid,$amount,$cfg){
+    $minDep=(int)($cfg['min_deposit']??RBD_MIN_DEPOSIT);$maxDep=(int)($cfg['max_deposit']??100000);
+    if($amount<$minDep){rbdTgSend($token,$cid,"❌ Minimum deposit is <b>₹".number_format($minDep)."</b>.");return false;}
+    if($amount>$maxDep){rbdTgSend($token,$cid,"❌ Maximum deposit is <b>₹".number_format($maxDep)."</b>.");return false;}
+    rbdTgSend($token,$cid,"⏳ <b>Processing...</b>\n\nCreating deposit request...");
+    $adminUser=rbdGetAdminUser($cfg);if(!$adminUser){rbdTgSend($token,$cid,"❌ Server error. Please contact admin.");rbdLog("Deposit failed: RB login failed chat={$cid}",'error');return false;}
+    $depositUser=rbdGetDepositUserId($cfg);$rbUserId=$depositUser['_id']??$depositUser['id']??($adminUser['_id']??null);$branch=trim($cfg['rb_branch']??'RBVIP1D');
+    $txn=rbdCreateDeposit($cfg,$rbUserId,$amount);$txnId=$txn['_id']??$txn['id']??$txn['transactionId']??null;$mode=$txn['mode']??'PowerPay';
+    if(!$txnId){rbdTgSend($token,$cid,"❌ Transaction could not be created. Please try again later.");rbdLog("Deposit failed: no txnId chat={$cid} amount={$amount}",'error');return false;}
+    $bank=rbdGetBankDetails($cfg,$amount);$upiId=$bank['upiId']??null;$accNo=$bank['accNo']??null;$ifsc=$bank['ifscCode']??null;$bankNm=$bank['bankName']??null;$accName=$bank['accHolderName']??null;
+    $payPageUrl="https://www.powerdreams.co/online/pay/{$branch}/{$txnId}";
+    $kb=['inline_keyboard'=>[[['text'=>'✅ Payment Done — Submit UTR','callback_data'=>'rbdsubmitutr_'.$txnId]]]];
+    $bankMsg="🎯 <b>Rebel B2W Deposit Details</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n🔖 Txn ID: <code>{$txnId}</code>\n";
+    if($upiId||$accNo){$bankMsg.="\n<b>💳 Bank / UPI Details:</b>\n".($upiId?"📱 UPI ID: <code>{$upiId}</code>\n":'').($accName?"👤 Name: <b>{$accName}</b>\n":'').($accNo?"🔢 Acc No: <code>{$accNo}</code>\n":'').($ifsc?"🏛 IFSC: <code>{$ifsc}</code>\n":'').($bankNm?"🏦 Bank: {$bankNm}\n":'');}
+    else{$bankMsg.="\n🌐 <b>Payment Page:</b>\n<code>{$payPageUrl}</code>\n\n<i>Open the link above to scan QR and pay</i>\n";}
+    $bankMsg.="\n⚠️ <b>Send exact amount ₹".number_format($amount)." only</b>\n\nAfter payment, send your UTR or screenshot 👇";
+    rbdTgSend($token,$cid,"⏳ Fetching payment QR...");
+    $qrFile=RBD_QR_DIR.'qr_'.$cid.'_'.time().'.png';sleep(3);
+    $qrSource=rbdFetchRealQR($txnId,$branch,$qrFile);
+    if($qrSource&&file_exists($qrFile)&&filesize($qrFile)>500){$cap="📸 <b>Payment QR</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n".($upiId?"📱 UPI: <code>{$upiId}</code>\n":'')."🔖 Txn: <code>{$txnId}</code>";$r=rbdTgSendPhoto($token,$cid,$qrFile,$cap,null);@unlink($qrFile);if(!empty($r['ok'])){rbdTgSend($token,$cid,$bankMsg,$kb);goto rbd_save_state;}}
+    if($upiId){$upiStr="upi://pay?pa={$upiId}&am={$amount}&cu=INR&tn=RebelB2W";$qrApis=["https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=".urlencode($upiStr),"https://quickchart.io/qr?size=512&text=".urlencode($upiStr),"https://chart.googleapis.com/chart?cht=qr&chs=512x512&chl=".urlencode($upiStr)];$uqf=RBD_QR_DIR.'upi_'.$cid.'_'.time().'.png';$sent=false;foreach($qrApis as $qa){$bytes=rbdFetchImage($qa,12);if($bytes&&strlen($bytes)>500){file_put_contents($uqf,$bytes);$cap="📱 <b>UPI QR Code</b>\n\n💰 Amount: <b>₹".number_format($amount)."</b>\n📱 UPI ID: <code>{$upiId}</code>\n🔖 Txn ID: <code>{$txnId}</code>";$r=rbdTgSendPhoto($token,$cid,$uqf,$cap,null);@unlink($uqf);if(!empty($r['ok'])){$sent=true;rbdTgSend($token,$cid,$bankMsg,$kb);break;}}}if(!$sent)rbdTgSend($token,$cid,$bankMsg."\n\n🔗 UPI Pay: <code>{$upiStr}</code>",$kb);}
+    else{rbdTgSend($token,$cid,$bankMsg."\n\n🌐 Open this link to pay:\n".$payPageUrl,$kb);}
+    rbd_save_state:
+    rbdSetState($cid,'awaiting_utr',['amount'=>$amount,'txn_id'=>$txnId,'upi_id'=>$upiId,'pay_url'=>$payPageUrl]);
+    rbdRlStart($cid);
+    $acid=trim($cfg['admin_chat_id']??'');if($acid)rbdTgSend($token,$acid,"🆕 <b>New Deposit</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($amount)."\n🔖 Txn: <code>{$txnId}</code>\n".($upiId?"📱 UPI: <code>{$upiId}</code>\n":'')."🌐 Mode: {$mode}\n🕐 ".date('d/m/Y H:i:s'));
+    return true;
+}
+
+function rbdTgDownload($token,$fileId){$r=tg('getFile',['file_id'=>$fileId],$token);$fp=$r['result']['file_path']??null;if(!$fp)return null;$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>"https://api.telegram.org/file/bot{$token}/{$fp}",CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>30,CURLOPT_SSL_VERIFYPEER=>true]);$b=curl_exec($ch);curl_close($ch);return($b&&strlen($b)>100)?$b:null;}
+
+function rbdPdOcr($bytes,$mime='image/jpeg'){$tmp=sys_get_temp_dir().'/rbd_ss_'.uniqid().'.jpg';file_put_contents($tmp,$bytes);$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://www.powerdreams.co/api/online/ocr/extract-utr',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_HTTPHEADER=>['Origin: https://www.powerdreams.co','Referer: https://www.powerdreams.co/online/pay/','User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)'],CURLOPT_POSTFIELDS=>['image'=>new CURLFile($tmp,$mime,'screenshot.jpg')]]);$raw=curl_exec($ch);curl_close($ch);@unlink($tmp);$data=json_decode($raw,true);if(!empty($data['success'])&&!empty($data['utr']))return trim($data['utr']);return null;}
+
+function rbdHandleScreenshotUtr($token,$cid,$msg,$state,$cfg){
+    $data=$state['data']??[];$amount=$data['amount']??0;$txnId=$data['txn_id']??null;$savedUtr=trim($data['utr']??'');
+    $photo=$msg['photo']??null;$doc=$msg['document']??null;
+    $fileId=null;$mime='image/jpeg';
+    if($photo){$largest=end($photo);$fileId=$largest['file_id'];}elseif($doc){$fileId=$doc['file_id'];$mime=$doc['mime_type']??'image/jpeg';}
+    if(!$fileId){rbdTgSend($token,$cid,"❌ Could not read the image. Please send a clear screenshot.");return;}
+    rbdTgSend($token,$cid,"⏳ Verifying your screenshot...");
+    $imageBytes=rbdTgDownload($token,$fileId);if(!$imageBytes){rbdTgSend($token,$cid,"❌ Could not download image. Please try again.");return;}
+    $ocrUtr=rbdPdOcr($imageBytes,$mime);
+    if($savedUtr&&$ocrUtr){$n1=strtoupper(preg_replace('/\s+/','',$savedUtr));$n2=strtoupper(preg_replace('/\s+/','',$ocrUtr));if($n1!==$n2){rbdTgSend($token,$cid,"❌ <b>UTR Didn't Match!</b>\n\nYou entered: <code>{$savedUtr}</code>\nScreenshot shows: <code>{$ocrUtr}</code>\n\nPlease send correct screenshot or re-enter UTR.");return;}}
+    elseif(!$savedUtr&&$ocrUtr){$savedUtr=$ocrUtr;}
+    rbdTgSend($token,$cid,"✅ <b>Request Queued!</b>\n\nYour payment has been submitted for verification.\n".($savedUtr?"🔢 UTR: <code>{$savedUtr}</code>\n":'')."Admin will confirm shortly.");
+    rbdClearState($cid);rbdRlCompleted($cid);
+    $acid=trim($cfg['admin_chat_id']??'');
+    if($acid){tg('forwardMessage',['chat_id'=>$acid,'from_chat_id'=>$cid,'message_id'=>$msg['message_id']],$token);rbdTgSend($token,$acid,"✅ <b>Payment Verified</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($amount)."\n🔢 UTR: <code>{$savedUtr}</code>\n".($txnId?"🔖 Txn: <code>{$txnId}</code>\n":'')."🕐 ".date('d/m/Y H:i:s'));}
+    rbdLog("Payment verified — chat={$cid} utr={$savedUtr} txn={$txnId}",'success');
+}
+
+function rbdHandleUpdate($update,$cfg){
+    $token=trim($cfg['bot_token']??'');if(!$token)return;
+    if(isset($update['callback_query'])){
+        $cq=$update['callback_query'];$cid=$cq['message']['chat']['id']??'';$cbdata=$cq['data']??'';$cqId=$cq['id']??'';
+        tg('answerCallbackQuery',['callback_query_id'=>$cqId],$token);
+        if(str_starts_with($cbdata,'rbdamt_')){$amount=(int)substr($cbdata,7);rbdProcessAmount($token,$cid,$amount,$cfg);return;}
+        if(str_starts_with($cbdata,'rbdsubmitutr_')){$state=rbdGetState($cid);if($state){rbdTgSend($token,$cid,"🔢 <b>Step 1: Enter your UTR Number</b>\n\n<i>12-digit transaction reference from your bank app</i>");rbdSetState($cid,'awaiting_utr_text',$state['data']);}}
+        return;
+    }
+    $msg=$update['message']??$update['channel_post']??null;if(!$msg)return;
+    $cid=$msg['chat']['id']??'';$text=trim($msg['text']??'');$userName=$msg['from']['username']??$msg['from']['first_name']??'User';$photo=$msg['photo']??null;$doc=$msg['document']??null;if(!$cid)return;
+    $state=rbdGetState($cid);
+    if($state&&($photo||$doc)){$st=$state['state']??'';if(in_array($st,['awaiting_utr','awaiting_utr_text','awaiting_screenshot'])){rbdHandleScreenshotUtr($token,$cid,$msg,$state,$cfg);return;}if($st==='awaiting_withdrawal_qr'){$data=$state['data']??[];$wAmount=(float)($data['w_amount']??0);$acid=trim($cfg['admin_chat_id']??'');if($acid){tg('forwardMessage',['chat_id'=>$acid,'from_chat_id'=>$cid,'message_id'=>$msg['message_id']],$token);rbdTgSend($token,$acid,"💸 <b>Withdrawal Request</b>\n\n📊 TG: <code>{$cid}</code>\n💰 Amount: ₹".number_format($wAmount,2)."\n🕐 ".date('d/m/Y H:i:s'));}rbdLdAddWithdrawal($cid,$wAmount);rbdClearState($cid);rbdTgSend($token,$cid,"✅ <b>Withdrawal Request Accepted</b>\n\n💰 Amount: <b>₹".number_format($wAmount,2)."</b>\n\nContact ".RBD_WITHDRAWAL_CONTACT." for assistance.");return;}}
+    $cmd=strtolower(explode('@',explode(' ',$text)[0])[0]);
+    if($cmd==='/start'){$welcome=str_replace('\n',"\n",$cfg['welcome_msg']??"Welcome to Rebel B2W!");rbdTgSend($token,$cid,$welcome,['keyboard'=>[['💰 Deposit','💸 Withdraw'],['💳 Balance','❓ Help']],'resize_keyboard'=>true]);rbdClearState($cid);return;}
+    if($cmd==='/deposit'||$text==='💰 Deposit'){rbdHandleDeposit($token,$cid,$userName,$cfg);return;}
+    if($cmd==='/balance'||$text==='💳 Balance'){$user=rbdLdGetUser($cid);$bal=(float)($user['balance']??0);$deps=array_slice(array_reverse($user['deposits']??[]),0,5);$dl='';foreach($deps as $d){$t=date('d/m/Y',strtotime($d['time']));$dl.="\n✅ ₹".number_format($d['amount'])." — {$t}".($d['utr']?" (UTR: {$d['utr']})":"");}rbdTgSend($token,$cid,"💳 <b>Your Rebel B2W Balance</b>\n\n💰 Available: <b>₹".number_format($bal,2)."</b>\n\n".($dl?"<b>Recent Deposits:</b>".$dl:"<i>No approved deposits yet.</i>")."\n\n<i>Balance credited after admin approval.</i>");return;}
+    if($cmd==='/withdrawal'||$text==='💸 Withdraw'){$user=rbdLdGetUser($cid);$bal=(float)($user['balance']??0);if($bal<=0){rbdTgSend($token,$cid,"❌ <b>Insufficient Balance</b>\n\nYour balance is ₹0. Make a deposit first.");return;}rbdTgSend($token,$cid,"💸 <b>Withdrawal Request</b>\n\n💰 Your Balance: <b>₹".number_format($bal,2)."</b>\n\nEnter the amount to withdraw:");rbdSetState($cid,'awaiting_withdrawal_amount',['balance'=>$bal]);return;}
+    if($cmd==='/help'||$text==='❓ Help'){rbdTgSend($token,$cid,"❓ <b>Help</b>\n\n/Deposit — Make deposit\n/Withdrawal — Request withdrawal\n/Balance — Check balance\n/Start — Restart\n\nSupport: ".RBD_WITHDRAWAL_CONTACT);return;}
+    if(!$state){rbdTgSend($token,$cid,"👇 Use /Deposit to deposit funds.");return;}
+    switch($state['state']){
+        case 'awaiting_amount':$amount=(float)preg_replace('/[^0-9.]/','', $text);if($amount<=0){rbdTgSend($token,$cid,"❌ Enter a valid amount. Example: <code>1000</code>");return;}rbdProcessAmount($token,$cid,(int)$amount,$cfg);break;
+        case 'awaiting_utr':case 'awaiting_utr_text':$utr=trim(preg_replace('/[^a-zA-Z0-9]/','',$text));if(strlen($utr)<6){rbdTgSend($token,$cid,"❌ Enter a valid UTR / reference number.");return;}$d2=$state['data'];$d2['utr']=$utr;rbdTgSend($token,$cid,"✅ UTR noted: <code>{$utr}</code>\n\n📸 <b>Now send your payment screenshot</b> to confirm.");rbdSetState($cid,'awaiting_screenshot',$d2);break;
+        case 'awaiting_screenshot':rbdTgSend($token,$cid,"📸 Please send a <b>screenshot</b> of your payment.");break;
+        case 'awaiting_withdrawal_amount':$wAmount=(float)preg_replace('/[^0-9.]/','',$text);$bal2=(float)($state['data']['balance']??0);if($wAmount<=0){rbdTgSend($token,$cid,"❌ Enter a valid amount.");return;}if($wAmount>$bal2){rbdTgSend($token,$cid,"❌ Insufficient balance.\n\nAvailable: <b>₹".number_format($bal2,2)."</b>");return;}rbdTgSend($token,$cid,"📸 <b>Send your UPI QR Code</b>\n\nAmount: <b>₹".number_format($wAmount,2)."</b>\n\nSend a screenshot of your UPI QR code.");rbdSetState($cid,'awaiting_withdrawal_qr',['balance'=>$bal2,'w_amount'=>$wAmount]);break;
+        case 'awaiting_withdrawal_qr':rbdTgSend($token,$cid,"📸 Please send your <b>UPI QR code image</b>.");break;
+        default:rbdClearState($cid);rbdTgSend($token,$cid,"👇 /Deposit — Make deposit\n/Balance — Check balance");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ██╗     ██╗███╗   ██╗██╗  ██╗    ██████╗ ██╗   ██╗███╗   ██╗███╗   ██╗███████╗██████╗
+// ██║     ██║████╗  ██║██║ ██╔╝    ██╔══██╗██║   ██║████╗  ██║████╗  ██║██╔════╝██╔══██╗
+// ██║     ██║██╔██╗ ██║█████╔╝     ██████╔╝██║   ██║██╔██╗ ██║██╔██╗ ██║█████╗  ██████╔╝
+// ██║     ██║██║╚██╗██║██╔═██╗     ██╔══██╗██║   ██║██║╚██╗██║██║╚██╗██║██╔══╝  ██╔══██╗
+// ███████╗██║██║ ╚████║██║  ██╗    ██║  ██║╚██████╔╝██║ ╚████║██║ ╚████║███████╗██║  ██║
+//  ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝
+// Link Runner — Integrated Module
+// ═══════════════════════════════════════════════════════════════════════════
+define('LR_VERSION',     '1.2');
+define('LR_CONFIG_FILE', __DIR__ . '/lr_config.json');
+define('LR_LOG_FILE',    __DIR__ . '/lr_logs.json');
+define('LR_SS_DIR',      __DIR__ . '/lr_screenshots/');
+define('LR_CURL_TO',     30);
+if(!is_dir(LR_SS_DIR))@mkdir(LR_SS_DIR,0755,true);
+
+$_lrDefaultConfig=[
+    'run_secret'    => 'changeme123',
+    'bot_token'     => '',
+    'chat_id'       => '',
+    'send_prefix'   => '🔗 <b>Link Runner</b>\n\n',
+    'links'         => [],
+    'webhook_token' => '',
+    'webhook_cmd'   => '/run',
+];
+function lrLoadConfig(){
+    global $_lrDefaultConfig;
+    if(!file_exists(LR_CONFIG_FILE))return$_lrDefaultConfig;
+    $l=json_decode(file_get_contents(LR_CONFIG_FILE),true);
+    return is_array($l)?array_merge($_lrDefaultConfig,$l):$_lrDefaultConfig;
+}
+function lrSaveConfig($cfg){file_put_contents(LR_CONFIG_FILE,json_encode($cfg,JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function lrLog($text,$type='info'){$l=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];array_unshift($l,['time'=>date('c'),'text'=>$text,'type'=>$type]);if(count($l)>300)$l=array_slice($l,0,300);file_put_contents(LR_LOG_FILE,json_encode($l,JSON_UNESCAPED_UNICODE),LOCK_EX);}
+
+function lrTg($method,$params,$token){$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/'.$method,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>json_encode($params),CURLOPT_HTTPHEADER=>['Content-Type: application/json']]);$r=curl_exec($ch);curl_close($ch);return json_decode($r,true)?:[];}
+
+function lrSend($token,$chatId,$text){if(!$token||!$chatId||!trim($text))return false;$chunks=lrChunk($text,4000);$ok=true;foreach($chunks as $chunk){$r=lrTg('sendMessage',['chat_id'=>$chatId,'text'=>$chunk,'parse_mode'=>'HTML','disable_web_page_preview'=>true],$token);if(!($r['ok']??false))$ok=false;}return $ok;}
+function lrChunk($text,$maxLen=4000){$chunks=[];while(mb_strlen($text)>$maxLen){$pos=mb_strrpos(mb_substr($text,0,$maxLen),"\n");if($pos===false)$pos=$maxLen;$chunks[]=mb_substr($text,0,$pos);$text=mb_substr($text,$pos);}if(trim($text)!=='')$chunks[]=$text;return $chunks?:[''];}
+
+function lrFetch($url,$method='GET',$headers='',$body='',$timeout=30,$sslVerify=true){
+    $hdrs=[];if($headers){foreach(explode("\n",$headers) as $h){$h=trim($h);if($h&&strpos($h,':')!==false)$hdrs[]=$h;}}
+    if(empty($hdrs))$hdrs=['User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36','Accept: application/json,text/html,*/*'];
+    $ch=curl_init();$o=[CURLOPT_URL=>$url,CURLOPT_RETURNTRANSFER=>true,CURLOPT_SSL_VERIFYPEER=>$sslVerify,CURLOPT_SSL_VERIFYHOST=>$sslVerify?2:0,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_HTTPHEADER=>$hdrs];
+    $m=strtoupper($method);if($m==='POST'){$o[CURLOPT_POST]=true;$o[CURLOPT_POSTFIELDS]=$body;}elseif($m!=='GET'){$o[CURLOPT_CUSTOMREQUEST]=$m;if($body)$o[CURLOPT_POSTFIELDS]=$body;}
+    curl_setopt_array($ch,$o);$res=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$err=curl_error($ch);curl_close($ch);
+    return['code'=>$code,'body'=>$res?:'','error'=>$err];
+}
+
+function lrJsonPath($data,$path){if(empty($path))return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;foreach(explode('.',$path) as $k){if(is_array($data)&&isset($data[$k]))$data=$data[$k];elseif(is_array($data)&&is_numeric($k)&&isset($data[(int)$k]))$data=$data[(int)$k];else return null;}return is_array($data)?json_encode($data,JSON_UNESCAPED_UNICODE):(string)$data;}
+function lrFlatten($data,$prefix='',$map=[]){if(!is_array($data)){if($prefix!=='')$map[$prefix]=(string)$data;return $map;}foreach($data as $k=>$v){$full=$prefix!==''?$prefix.'.'.$k:(string)$k;if(is_array($v))$map=lrFlatten($v,$full,$map);else{$map[$full]=(string)$v;if(!isset($map[$k]))$map[$k]=(string)$v;}}return $map;}
+function lrReplace($text,$vars){foreach($vars as $k=>$v){$text=str_replace('{'.$k.'}',(string)$v,$text);}return $text;}
+
+function lrFetchScreenshotBytes($url,$timeout=30){
+    $thumbUrl='https://image.thum.io/get/width/1280/crop/900/png/'.urlencode($url);
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$thumbUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (compatible; LinkRunner/1.1)']);
+    $data=curl_exec($ch);$code=curl_getinfo($ch,CURLINFO_HTTP_CODE);$ct=curl_getinfo($ch,CURLINFO_CONTENT_TYPE);curl_close($ch);
+    if($code===200&&$data&&str_contains((string)$ct,'image'))return['bytes'=>$data,'source'=>'thum.io'];
+    $ml='https://api.microlink.io/?url='.urlencode($url).'&screenshot=true&meta=false&embed=screenshot.url';
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$ml,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>$timeout,CURLOPT_CONNECTTIMEOUT=>15,CURLOPT_FOLLOWLOCATION=>true,CURLOPT_MAXREDIRS=>5,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_USERAGENT=>'Mozilla/5.0 (compatible; LinkRunner/1.1)']);
+    $mlData=json_decode(curl_exec($ch),true);curl_close($ch);
+    $ssUrl=$mlData['data']['screenshot']['url']??($mlData['data']['screenshot']??null);
+    if($ssUrl&&str_starts_with($ssUrl,'http')){$ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>$ssUrl,CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20,CURLOPT_SSL_VERIFYPEER=>false,CURLOPT_FOLLOWLOCATION=>true]);$imgData=curl_exec($ch);$imgCode=curl_getinfo($ch,CURLINFO_HTTP_CODE);curl_close($ch);if($imgCode===200&&$imgData)return['bytes'=>$imgData,'source'=>'microlink'];}
+    return null;
+}
+
+function lrTakeScreenshot($url,$token,$chatId,$caption,$timeout=30){
+    if(!$token||!$chatId)return false;
+    $result=lrFetchScreenshotBytes($url,$timeout);if(!$result)return false;
+    $ssFile=LR_SS_DIR.'ss_'.md5($url.microtime()).'.png';file_put_contents($ssFile,$result['bytes']);
+    if(!file_exists($ssFile)||filesize($ssFile)<500){@unlink($ssFile);return false;}
+    $ch=curl_init();curl_setopt_array($ch,[CURLOPT_URL=>'https://api.telegram.org/bot'.$token.'/sendPhoto',CURLOPT_RETURNTRANSFER=>true,CURLOPT_POST=>true,CURLOPT_SSL_VERIFYPEER=>true,CURLOPT_SSL_VERIFYHOST=>2,CURLOPT_TIMEOUT=>40,CURLOPT_POSTFIELDS=>['chat_id'=>$chatId,'caption'=>$caption."\n<i>via ".($result['source']??'API')."</i>",'parse_mode'=>'HTML','photo'=>new CURLFile($ssFile,'image/png','screenshot.png')]]);
+    $r=json_decode(curl_exec($ch),true);curl_close($ch);@unlink($ssFile);
+    if(empty($r['ok'])){$r2=lrTg('sendPhoto',['chat_id'=>$chatId,'photo'=>'https://image.thum.io/get/width/1280/crop/900/png/'.urlencode($url),'caption'=>$caption,'parse_mode'=>'HTML'],$token);return!empty($r2['ok']);}
+    return!empty($r['ok']);
+}
+
+function lrRunAll($cfg,$extraVars=[]){
+    $results=[];$links=$cfg['links']??[];
+    foreach($links as $link){
+        if(empty($link['enabled']))continue;
+        $id=$link['id']??uniqid('lr_');$name=$link['name']??$id;$url=trim($link['url']??'');if(!$url)continue;
+        $vars=array_merge(['ts'=>date('Y-m-d H:i:s'),'date'=>date('Y-m-d'),'time'=>date('H:i:s')],$extraVars);
+        $url=lrReplace($url,$vars);$headers=lrReplace($link['headers']??'',$vars);$body2=lrReplace($link['body']??'',$vars);
+        $timeout=max(5,min(120,(int)($link['timeout']??30)));$ssl=!isset($link['ssl_verify'])||(bool)$link['ssl_verify'];
+        $chatId2=trim($link['chat_id']??'')?:trim($cfg['chat_id']??'');$token2=trim($cfg['bot_token']??'');
+        $useScreenshot=!empty($link['screenshot_mode']);
+        if($useScreenshot){
+            $ssCaption=lrReplace($link['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}',array_merge($vars,['name'=>htmlspecialchars($name,ENT_NOQUOTES,'UTF-8'),'url'=>htmlspecialchars($url,ENT_NOQUOTES,'UTF-8')]));
+            $sent=false;if($token2&&$chatId2)$sent=lrTakeScreenshot($url,$token2,$chatId2,$ssCaption,$timeout);
+            $results[]=['id'=>$id,'name'=>$name,'url'=>$url,'code'=>0,'failed'=>!$sent,'extracted'=>$sent?'[screenshot sent]':'[screenshot failed]','sent'=>$sent,'msg'=>$ssCaption,'mode'=>'screenshot'];
+            lrLog(($sent?"SS OK [{$id}]":"SS FAIL [{$id}]")." → ".$name,$sent?'success':'error');continue;
+        }
+        $result=lrFetch($url,$link['method']??'GET',$headers,$body2,$timeout,$ssl);$rawBody=$result['body']??'';$code=$result['code']??0;
+        $extracted=null;$respPath=trim($link['response_path']??'');$respData=json_decode($rawBody,true);
+        if($respPath!==''&&$respData!==null)$extracted=lrJsonPath($respData,$respPath);
+        if($extracted===null&&is_array($respData)){foreach(['result','response','text','content','answer','message','output','data','value'] as $fk){if(isset($respData[$fk])&&is_string($respData[$fk])&&trim($respData[$fk])!==''){$extracted=$respData[$fk];break;}}}
+        if($extracted===null)$extracted=$rawBody;
+        $failed=($code>=400||$extracted===null||$extracted==='');
+        $replyTpl=$link['reply_template']??'📌 <b>{name}</b>\n{response}';
+        $allVars=array_merge($vars,['name'=>htmlspecialchars($name,ENT_NOQUOTES,'UTF-8'),'url'=>htmlspecialchars($url,ENT_NOQUOTES,'UTF-8'),'http_code'=>$code,'response'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'result'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'curl_response'=>htmlspecialchars((string)$extracted,ENT_NOQUOTES,'UTF-8'),'raw'=>htmlspecialchars($rawBody,ENT_NOQUOTES,'UTF-8'),'status'=>$failed?'❌ FAILED':'✅ OK','error'=>htmlspecialchars($result['error']??'',ENT_NOQUOTES,'UTF-8')]);
+        if(is_array($respData)){$flat=lrFlatten($respData);uksort($flat,fn($a,$b)=>strlen($b)-strlen($a));foreach($flat as $fk=>$fv)$allVars[$fk]=htmlspecialchars((string)$fv,ENT_NOQUOTES,'UTF-8');}
+        $msgText=lrReplace($replyTpl,$allVars);$sent=false;
+        if(!$failed&&$token2&&$chatId2){$prefix=str_replace('\n',"\n",$cfg['send_prefix']??'');$sent=lrSend($token2,$chatId2,$prefix.$msgText);}
+        elseif($failed&&!empty($link['send_on_error'])&&$token2&&$chatId2){$errTpl=$link['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>';lrSend($token2,$chatId2,lrReplace($errTpl,$allVars));}
+        $results[]=['id'=>$id,'name'=>$name,'url'=>$url,'code'=>$code,'failed'=>$failed,'extracted'=>$extracted,'sent'=>$sent,'msg'=>$msgText,'mode'=>'curl'];
+        lrLog(($failed?"FAIL [{$id}] HTTP {$code}":"OK [{$id}] HTTP {$code}")." → ".$name,$failed?'error':'success');
+    }
+    return $results;
+}
+
 function sendSticker($chatId,$stickerId,$token){
     return tg('sendSticker',['chat_id'=>$chatId,'sticker'=>$stickerId],$token);
 }
@@ -3594,6 +3943,33 @@ function handleLaFormCapture($botId,$chatId,$u,&$db,$s,$msgText,$token){
     return true;
 }
 
+// ─── RBD (Deposit Bot) Webhook ───────────────────────────────────────────
+if(isset($_GET['rbd_webhook'])){
+    $rbdCfg=rbdLoadConfig();
+    $rbdUpdate=json_decode(file_get_contents('php://input'),true);
+    if(is_array($rbdUpdate))rbdHandleUpdate($rbdUpdate,$rbdCfg);
+    http_response_code(200);exit;
+}
+
+// ─── Link Runner Webhook ─────────────────────────────────────────────────
+if(isset($_GET['lr_webhook'])){
+    $lrCfg=lrLoadConfig();$lrWToken=trim($lrCfg['webhook_token']?:$lrCfg['bot_token']);
+    $lrUpdate=json_decode(file_get_contents('php://input'),true);
+    if(!is_array($lrUpdate)){http_response_code(200);exit;}
+    $lrMsg=$lrUpdate['message']??$lrUpdate['channel_post']??null;
+    if($lrMsg){$lrText=trim($lrMsg['text']??'');$lrChatId=$lrMsg['chat']['id']??'';$lrCmd=trim($lrCfg['webhook_cmd']??'/run');
+    if(str_starts_with(strtolower($lrText),strtolower($lrCmd))){lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>'⏳ Running links...','parse_mode'=>'HTML'],$lrWToken);$lrResults=lrRunAll($lrCfg,['tg_chat'=>$lrChatId]);$lrOk=count(array_filter($lrResults,fn($r)=>!$r['failed']));$lrTot=count($lrResults);lrTg('sendMessage',['chat_id'=>$lrChatId,'text'=>"✅ <b>Link Runner Done!</b>\n\n📊 Results: <code>{$lrOk}/{$lrTot}</code> success",'parse_mode'=>'HTML'],$lrWToken);}}
+    http_response_code(200);exit;
+}
+
+// ─── Link Runner URL trigger (?lr_run=1&secret=X) ────────────────────────
+if(isset($_GET['lr_run'])){
+    $lrCfg2=lrLoadConfig();$lrSecret=$_GET['secret']??'';
+    if($lrSecret!==$lrCfg2['run_secret']){http_response_code(403);echo json_encode(['ok'=>false,'error'=>'Invalid secret']);exit;}
+    header('Content-Type: application/json');$lrRes2=lrRunAll($lrCfg2);
+    echo json_encode(['ok'=>true,'results'=>$lrRes2,'total'=>count($lrRes2),'success'=>count(array_filter($lrRes2,fn($r)=>!$r['failed']))]);exit;
+}
+
 session_start();
 function san($x){return htmlspecialchars(strip_tags(trim($x)),ENT_QUOTES,'UTF-8');}
 function jout($d){header('Content-Type: application/json');echo json_encode($d);exit;}
@@ -4309,6 +4685,61 @@ if($page==='api'){
             if($extracted===null)$extracted=$rawResp;
             jout(['ok'=>true,'http_code'=>$testResult['code'],'raw_body'=>mb_substr($rawResp,0,2000),'extracted'=>mb_substr((string)$extracted,0,1000),'error'=>$testResult['error']??'']);break;
 
+        // ─── RBD (Deposit Bot) API Actions ──────────────────────────
+        case 'rbd_get_config':
+            $rbdC=rbdLoadConfig();unset($rbdC['admin_pass']);jout(['ok'=>true,'data'=>$rbdC]);break;
+        case 'rbd_save_config':
+            $rbdC=rbdLoadConfig();foreach(['bot_token','admin_chat_id','rb_phone','rb_password','rb_branch','rb_bank_id','welcome_msg','deposit_thanks'] as $rk){if(isset($body[$rk]))$rbdC[$rk]=trim($body[$rk]);}foreach(['min_deposit','max_deposit'] as $rk){if(isset($body[$rk]))$rbdC[$rk]=(int)$body[$rk];}if(!empty($body['new_pass'])&&strlen(trim($body['new_pass']))>=4)$rbdC['admin_pass']=trim($body['new_pass']);rbdSaveConfig($rbdC);rbdLog('Config saved','info');jout(['ok'=>true]);break;
+        case 'rbd_set_webhook':
+            $rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $rbdPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';$rbdWUrl=$rbdPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?rbd_webhook=1';
+            $rbdR=tg('setWebhook',['url'=>$rbdWUrl,'allowed_updates'=>['message','channel_post','callback_query']],$rbdTok);jout(['ok'=>$rbdR['ok']??false,'webhook_url'=>$rbdWUrl,'tg'=>$rbdR]);break;
+        case 'rbd_remove_webhook':
+            $rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $rbdR=tg('deleteWebhook',[],$rbdTok);jout(['ok'=>$rbdR['ok']??false]);break;
+        case 'rbd_test_rb_login':
+            $rbdC=rbdLoadConfig();@unlink(RBD_COOKIE_DIR.'admin.txt');$rbdU=rbdAdminLogin($rbdC);jout($rbdU?['ok'=>true,'user'=>$rbdU]:['ok'=>false,'error'=>'Login failed']);break;
+        case 'rbd_test_bank':
+            $rbdC=rbdLoadConfig();$rbdBk=rbdGetBankDetails($rbdC,500);jout(['ok'=>(bool)$rbdBk,'bank'=>$rbdBk,'source'=>'powerdreams.co/api/online/request/fetchAvailablePeer']);break;
+        case 'rbd_send_test':
+            $rbdC=rbdLoadConfig();$rbdCid=trim($body['chat_id']??$rbdC['admin_chat_id']??'');$rbdTok=trim($rbdC['bot_token']??'');if(!$rbdCid||!$rbdTok)jout(['ok'=>false,'error'=>'Token/chat_id missing']);$rbdR=rbdTgSend($rbdTok,$rbdCid,"✅ <b>Rebel B2W</b> is working!\n\n".date('d/m/Y H:i:s'));jout(['ok'=>$rbdR['ok']??false]);break;
+        case 'rbd_approve_deposit':
+            $rbdCid=trim($body['chat_id']??'');$rbdAmt=(float)($body['amount']??0);$rbdUtr=trim($body['utr']??'');$rbdTxn=trim($body['txn_id']??'');if(!$rbdCid||$rbdAmt<=0)jout(['ok'=>false,'error'=>'chat_id and amount required']);rbdLdAddDeposit($rbdCid,$rbdAmt,$rbdUtr,$rbdTxn);$rbdC=rbdLoadConfig();$rbdTok=trim($rbdC['bot_token']??'');if($rbdTok)rbdTgSend($rbdTok,$rbdCid,"✅ <b>Deposit Approved!</b>\n\n💰 ₹".number_format($rbdAmt,2)." credited.\n".($rbdUtr?"🔢 UTR: <code>{$rbdUtr}</code>\n":"")."\nUse /Balance to check balance.");rbdLog("Deposit approved — chat={$rbdCid} amount={$rbdAmt}",'success');jout(['ok'=>true,'user'=>rbdLdGetUser($rbdCid)]);break;
+        case 'rbd_get_ledger':
+            $rbdLd=rbdLdLoad();jout(['ok'=>true,'ledger'=>$rbdLd,'total_users'=>count($rbdLd)]);break;
+        case 'rbd_get_blocked':
+            $rbdRl=rbdRlLoad();$rbdNow=time();$rbdBl=[];foreach($rbdRl as $rbdCk=>$rbdRec){if(!empty($rbdRec['blocked_until'])&&$rbdRec['blocked_until']>$rbdNow)$rbdBl[$rbdCk]=['blocked_until'=>$rbdRec['blocked_until'],'remaining_mins'=>ceil(($rbdRec['blocked_until']-$rbdNow)/60),'incomplete'=>$rbdRec['incomplete']??0];}jout(['ok'=>true,'blocked'=>$rbdBl,'total'=>count($rbdBl)]);break;
+        case 'rbd_unblock_user':
+            $rbdCid=trim($body['chat_id']??'');if(!$rbdCid)jout(['ok'=>false,'error'=>'chat_id required']);rbdRlCompleted($rbdCid);jout(['ok'=>true,'msg'=>"User {$rbdCid} unblocked"]);break;
+        case 'rbd_get_logs':
+            $rbdLogs=file_exists(RBD_LOG_FILE)?(json_decode(file_get_contents(RBD_LOG_FILE),true)?:[]):[];jout(['ok'=>true,'data'=>array_slice($rbdLogs,0,150)]);break;
+        case 'rbd_clear_logs':
+            file_put_contents(RBD_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
+        // ─── Link Runner API Actions ─────────────────────────────────
+        case 'lr_get_config':
+            $lrC=lrLoadConfig();unset($lrC['admin_pass']);jout(['ok'=>true,'data'=>$lrC]);break;
+        case 'lr_save_config':
+            $lrC=lrLoadConfig();foreach(['bot_token','chat_id','send_prefix','run_secret','webhook_token','webhook_cmd'] as $lk){if(isset($body[$lk]))$lrC[$lk]=trim($body[$lk]);}if(!empty($body['new_pass'])&&strlen(trim($body['new_pass']))>=4)$lrC['admin_pass']=trim($body['new_pass']);lrSaveConfig($lrC);lrLog('Config saved','info');jout(['ok'=>true]);break;
+        case 'lr_save_links':
+            $lrC=lrLoadConfig();$lrLinks=[];foreach($body['links']??[] as $lk){$lrU=trim($lk['url']??'');if(!$lrU)continue;$lrLinks[]=['id'=>preg_replace('/[^a-zA-Z0-9_]/','_',$lk['id']??uniqid('l_')),'name'=>trim($lk['name']??'Link'),'enabled'=>(bool)($lk['enabled']??true),'url'=>$lrU,'method'=>strtoupper(trim($lk['method']??'GET')),'headers'=>trim($lk['headers']??''),'body'=>trim($lk['body']??''),'timeout'=>max(5,min(120,(int)($lk['timeout']??30))),'ssl_verify'=>!isset($lk['ssl_verify'])||(bool)$lk['ssl_verify'],'response_path'=>trim($lk['response_path']??''),'reply_template'=>trim($lk['reply_template']??'📌 <b>{name}</b>\n\n{response}'),'error_message'=>trim($lk['error_message']??'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>'),'send_on_error'=>(bool)($lk['send_on_error']??false),'chat_id'=>trim($lk['chat_id']??''),'screenshot_mode'=>(bool)($lk['screenshot_mode']??false),'screenshot_caption'=>trim($lk['screenshot_caption']??'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')];}$lrC['links']=$lrLinks;lrSaveConfig($lrC);lrLog('Links saved — '.count($lrLinks).' rule(s)','info');jout(['ok'=>true,'count'=>count($lrLinks)]);break;
+        case 'lr_run_now':
+            $lrC=lrLoadConfig();$lrRes=lrRunAll($lrC);lrLog('Manual run — '.count($lrRes).' link(s)','info');jout(['ok'=>true,'results'=>$lrRes,'success'=>count(array_filter($lrRes,fn($r)=>!$r['failed']))]);break;
+        case 'lr_run_single':
+            $lrC=lrLoadConfig();$lrLinkId=trim($body['link_id']??'');$lrSingle=null;foreach($lrC['links'] as $lk){if(($lk['id']??'')===$lrLinkId){$lrSingle=$lk;break;}}if(!$lrSingle)jout(['ok'=>false,'error'=>'Link not found']);$lrTmpC=$lrC;$lrTmpC['links']=[$lrSingle];$lrRes=lrRunAll($lrTmpC);jout(['ok'=>true,'result'=>$lrRes[0]??null]);break;
+        case 'lr_test_link':
+            $lrU=trim($body['url']??'');$lrM=strtoupper(trim($body['method']??'GET'));$lrH=trim($body['headers']??'');$lrB=trim($body['body']??'');$lrTo=max(5,min(60,(int)($body['timeout']??15)));if(!$lrU)jout(['ok'=>false,'error'=>'URL required']);$lrR=lrFetch($lrU,$lrM,$lrH,$lrB,$lrTo);jout(['ok'=>true,'code'=>$lrR['code'],'body'=>mb_substr($lrR['body'],0,2000),'error'=>$lrR['error']]);break;
+        case 'lr_set_webhook':
+            $lrC=lrLoadConfig();$lrTok=trim($lrC['webhook_token']?:$lrC['bot_token']);if(!$lrTok)jout(['ok'=>false,'error'=>'Bot token not set']);
+            $lrPr=(!empty($_SERVER['HTTPS'])&&$_SERVER['HTTPS']!=='off')?'https://':'http://';$lrWUrl=$lrPr.$_SERVER['HTTP_HOST'].strtok($_SERVER['REQUEST_URI'],'?').'?lr_webhook=1';
+            $lrR=lrTg('setWebhook',['url'=>$lrWUrl,'allowed_updates'=>['message','channel_post']],$lrTok);jout(['ok'=>$lrR['ok']??false,'webhook_url'=>$lrWUrl,'tg'=>$lrR]);break;
+        case 'lr_remove_webhook':
+            $lrC=lrLoadConfig();$lrTok=trim($lrC['webhook_token']?:$lrC['bot_token']);if(!$lrTok)jout(['ok'=>false,'error'=>'Bot token not set']);$lrR=lrTg('deleteWebhook',[],$lrTok);jout(['ok'=>$lrR['ok']??false]);break;
+        case 'lr_get_logs':
+            $lrLogs=file_exists(LR_LOG_FILE)?(json_decode(file_get_contents(LR_LOG_FILE),true)?:[]):[];jout(['ok'=>true,'data'=>array_slice($lrLogs,0,100)]);break;
+        case 'lr_clear_logs':
+            file_put_contents(LR_LOG_FILE,'[]',LOCK_EX);jout(['ok'=>true]);break;
+
         default:jout(['ok'=>false,'error'=>'Unknown action']);
     }
 }
@@ -4490,6 +4921,8 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="ni" onclick="nav('hiddeneye',this)" style="color:#39ff14;border-left:2px solid #39ff14">👁 Hidden Eye Bot</button>
         <button class="ni" onclick="nav('promobot',this)" style="color:#ff9f0a;border-left:2px solid #ff9f0a">📢 Promo Bot</button>
     <button class="ni" onclick="nav('linkautomation',this)" style="color:#00f5ff;border-left:2px solid #00f5ff">🔗 Link Automation</button>
+    <button class="ni" onclick="nav('depositbot',this)" style="color:#ff6b1a;border-left:2px solid #ff6b1a">💰 Deposit Bot</button>
+    <button class="ni" onclick="nav('linkrunner',this)" style="color:#7c7cff;border-left:2px solid #7c7cff">🔗 Link Runner</button>
     <a href="?page=logout" class="ni" style="color:var(--r)">🚪 Logout</a>
   </nav>
 </aside>
@@ -6433,6 +6866,152 @@ td{padding:9px 11px;vertical-align:middle;}
 
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 💰 DEPOSIT BOT PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-depositbot">
+    <div class="card" style="border-color:rgba(255,107,26,.5);background:linear-gradient(135deg,rgba(255,107,26,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#ff6b1a;font-size:14px">💰 REBEL B2W DEPOSIT BOT</div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Users /Deposit karke amount dalte hain — QR code auto send hota hai</div>
+        </div>
+      </div>
+      <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--g);line-height:1.8">
+        ✅ <b>Flow:</b> User /Deposit → Amount enter → QR code + bank details → User pays → UTR/Screenshot submit → Admin gets notification
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsu bsm" onclick="rbdSaveCfg()">💾 Save Config</button>
+        <button class="btn bg bsm" onclick="rbdSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="rbdRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="rbdTestLogin()">🔑 Test RB Login</button>
+        <button class="btn bg bsm" onclick="rbdTestBank()">🏦 Test Bank/UPI</button>
+        <button class="btn bsu bsm" onclick="rbdSendTest()">📨 Send Test</button>
+        <button class="btn bsm" style="background:rgba(255,107,26,.2);color:#ff6b1a;border:1px solid #ff6b1a" onclick="rbdLoadLedger()">👥 User Ledger</button>
+        <button class="btn bd bsm" onclick="rbdLoadBlocked()">🚫 Blocked Users</button>
+        <button class="btn bg bsm" onclick="rbdLoadLogs()">📋 Logs</button>
+        <button class="btn bd bsm" onclick="rbdClearLogs()">🗑️ Clear Logs</button>
+      </div>
+    </div>
+
+    <!-- Config Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚙️ BOT CONFIGURATION</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Telegram Bot Token</label><input type="password" id="rbd-token" class="fi" placeholder="123456789:ABCdef..."></div>
+        <div class="fgrp"><label class="fl">👑 Admin Chat ID (notifications)</label><input type="text" id="rbd-admin-chat" class="fi" placeholder="-100xxxx or personal ID"></div>
+      </div>
+      <div style="background:rgba(255,107,26,.07);border:1px solid rgba(255,107,26,.25);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="color:#ff6b1a;font-size:12px;font-weight:700;margin-bottom:8px">🎯 Rebel B2W / RockyBook Account</div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">👤 Username / Phone (loginType)</label><input type="text" id="rbd-rbphone" class="fi" placeholder="username or phone"></div>
+          <div class="fgrp"><label class="fl">🔒 Password</label><input type="password" id="rbd-rbpass" class="fi" placeholder="Account password"></div>
+        </div>
+        <div class="fg mb">
+          <div class="fgrp"><label class="fl">🌿 Branch Name</label><input type="text" id="rbd-branch" class="fi" placeholder="RBVIP1D"></div>
+          <div class="fgrp"><label class="fl">🏦 Bank ID (optional)</label><input type="text" id="rbd-bankid" class="fi" placeholder="auto-detect if blank"></div>
+        </div>
+        <div style="background:rgba(57,255,20,.07);border:1px solid rgba(57,255,20,.25);border-radius:6px;padding:10px;font-size:12px;color:var(--g)">🔒 <b>Hardcoded Deposit User:</b> <code>@Ujjwal0999</code> — All deposits go to this account.</div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">💰 Min Deposit (₹)</label><input type="number" id="rbd-minDep" class="fi" placeholder="500" min="100" value="500"></div>
+        <div class="fgrp"><label class="fl">💰 Max Deposit (₹)</label><input type="number" id="rbd-maxDep" class="fi" placeholder="100000" value="100000"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">👋 Welcome Message (\n for newline)</label><textarea id="rbd-welcome" class="fi fta" rows="3"></textarea></div>
+        <div class="fgrp"><label class="fl">✅ Deposit Thanks Message</label><textarea id="rbd-thanks" class="fi fta" rows="3"></textarea></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔒 Change Admin Password (min 4 chars)</label><input type="password" id="rbd-newpass" class="fi" placeholder="Leave blank to keep current"></div>
+      </div>
+      <button class="btn bsu" onclick="rbdSaveCfg()" style="width:100%;margin-top:8px">💾 Save Config</button>
+    </div>
+
+    <!-- Users/Logs display -->
+    <div class="card" id="rbd-info-card" style="display:none">
+      <div class="sh"><div class="st" id="rbd-info-title" style="color:var(--c)">📊 Info</div><button class="btn bg bsm" onclick="g('rbd-info-card').style.display='none'">✕ Close</button></div>
+      <div id="rbd-info-body"></div>
+    </div>
+
+    <!-- Logs Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">📋 DEPOSIT BOT LOGS</div><div style="display:flex;gap:6px"><button class="btn bg bsm" onclick="rbdLoadLogs()">🔄 Refresh</button><button class="btn bd bsm" onclick="rbdClearLogs()">🗑️ Clear</button></div></div>
+      <div class="log-t" id="rbd-log-box"><div style="color:var(--td)">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 🔗 LINK RUNNER PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-linkrunner">
+    <div class="card" style="border-color:rgba(124,124,255,.5);background:linear-gradient(135deg,rgba(124,124,255,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:var(--c);font-size:14px">🔗 REBEL LINK RUNNER <small style="font-size:10px;color:var(--td)">v<?=LR_VERSION?></small></div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Specific links run karo — responses Telegram pe send karo</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--g)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn bg bsm" onclick="lrRunAll()">▶️ Run All Now</button>
+        <button class="btn bsu bsm" onclick="lrSavePage()">💾 Save All</button>
+        <button class="btn bg bsm" onclick="lrSetWebhook()">🔗 Set Webhook</button>
+        <button class="btn bd bsm" onclick="lrRemoveWebhook()">❌ Remove Webhook</button>
+        <button class="btn bg bsm" onclick="lrLoadLogs()">📋 Refresh Logs</button>
+        <button class="btn bd bsm" onclick="lrClearLogs()">🗑️ Clear Logs</button>
+        <span id="lr-run-status" style="font-size:12px;color:var(--td)"></span>
+      </div>
+    </div>
+
+    <!-- Global Config -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">⚙️ GLOBAL CONFIG</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Bot Token</label><input type="password" id="lr-token" class="fi" placeholder="123456789:ABC..."></div>
+        <div class="fgrp"><label class="fl">💬 Default Chat ID</label><input type="text" id="lr-chat" class="fi" placeholder="-100xxxx or @channel"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">📝 Message Prefix (use \n for newline)</label><input type="text" id="lr-prefix" class="fi" placeholder="🔗 &lt;b&gt;Link Runner&lt;/b&gt;\n\n"></div>
+        <div class="fgrp"><label class="fl">🔑 URL Run Secret (?lr_run=1&amp;secret=X)</label><input type="text" id="lr-secret" class="fi" placeholder="changeme123"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔔 Webhook Bot Token (blank = use main)</label><input type="text" id="lr-wtoken" class="fi" placeholder="Same or different token"></div>
+        <div class="fgrp"><label class="fl">📟 Webhook Trigger Command</label><input type="text" id="lr-wcmd" class="fi" placeholder="/run"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🔒 Change Admin Password (min 4 chars)</label><input type="password" id="lr-newpass" class="fi" placeholder="Leave blank to keep current"></div>
+      </div>
+      <button class="btn bsu" onclick="lrSaveConfig()" style="width:100%;margin-top:8px">💾 Save Config</button>
+    </div>
+
+    <!-- Link Rules Card -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">🔗 LINK RULES <span id="lr-link-count" style="background:rgba(0,245,255,.1);color:var(--c);padding:2px 8px;border-radius:4px;font-size:10px;margin-left:6px">0</span></div><button class="btn bsu bsm" onclick="lrAddLink()">+ Add Link</button></div>
+      <div id="lr-links-container"></div>
+    </div>
+
+    <!-- Run Results -->
+    <div class="card" id="lr-results-card" style="display:none">
+      <div class="sh"><div class="st" style="color:var(--g)">📊 LAST RUN RESULTS</div></div>
+      <div id="lr-results-body"></div>
+    </div>
+
+    <!-- Logs -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--c)">📋 LINK RUNNER LOGS</div><div style="display:flex;gap:6px"><button class="btn bg bsm" onclick="lrLoadLogs()">🔄</button><button class="btn bd bsm" onclick="lrClearLogs()">🗑️</button></div></div>
+      <div class="log-t" id="lr-log-box"><div style="color:var(--td)">Loading...</div></div>
+    </div>
+  </div>
+
 <?php endif ?>
 
 <script>
@@ -6448,7 +7027,7 @@ function nav(id,btn){
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
   window.scrollTo({top:0,behavior:'instant'});
   document.documentElement.scrollTop=0;document.body.scrollTop=0;
-  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad};
+  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad,depositbot:rbdInit,linkrunner:lrInit};
   if(m[id])m[id]();
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
@@ -9322,4 +9901,241 @@ async function laSave(silent=false){
     if(res){ res.style.display='block'; res.innerHTML='<div style="color:var(--r);font-family:\'Share Tech Mono\';font-size:12px">&#10060; '+(r.error||'Unknown error')+'</div>'; }
   }
 }
+
+// ═══════════════════════════════════════════════════════════
+// 💰 DEPOSIT BOT JAVASCRIPT
+// ═══════════════════════════════════════════════════════════
+function rbdInit(){ rbdLoadCfg(); rbdLoadLogs(); }
+
+async function rbdLoadCfg(){
+  const r=await api('rbd_get_config');if(!r.ok)return;const d=r.data||{};
+  g('rbd-token').value=d.bot_token||'';g('rbd-admin-chat').value=d.admin_chat_id||'';
+  g('rbd-rbphone').value=d.rb_phone||'';g('rbd-rbpass').value=d.rb_password||'';
+  g('rbd-branch').value=d.rb_branch||'RBVIP1D';g('rbd-bankid').value=d.rb_bank_id||'';
+  g('rbd-minDep').value=d.min_deposit||500;g('rbd-maxDep').value=d.max_deposit||100000;
+  g('rbd-welcome').value=d.welcome_msg||'';g('rbd-thanks').value=d.deposit_thanks||'';
+}
+
+async function rbdSaveCfg(){
+  const payload={
+    bot_token:g('rbd-token').value.trim(),admin_chat_id:g('rbd-admin-chat').value.trim(),
+    rb_phone:g('rbd-rbphone').value.trim(),rb_password:g('rbd-rbpass').value.trim(),
+    rb_branch:g('rbd-branch').value.trim()||'RBVIP1D',rb_bank_id:g('rbd-bankid').value.trim(),
+    min_deposit:parseInt(g('rbd-minDep').value)||500,max_deposit:parseInt(g('rbd-maxDep').value)||100000,
+    welcome_msg:g('rbd-welcome').value,deposit_thanks:g('rbd-thanks').value,
+    new_pass:g('rbd-newpass').value.trim(),
+  };
+  const r=await api('rbd_save_config',payload);
+  r.ok?toast('✅ Deposit Bot config saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function rbdSetWebhook(){
+  toast('Setting webhook...','info');
+  const r=await api('rbd_set_webhook');
+  r.ok?toast('✅ Webhook set: '+r.webhook_url,'success'):toast('❌ '+(r.error||r.tg?.description||'failed'),'error');
+}
+async function rbdRemoveWebhook(){const r=await api('rbd_remove_webhook');r.ok?toast('Webhook removed','info'):toast('Error','error');}
+
+async function rbdTestLogin(){
+  toast('Testing Rebel B2W login...','info');
+  const r=await api('rbd_test_rb_login');
+  if(r.ok){const u=r.user||{};toast('✅ Login OK! '+(u.clientName||JSON.stringify(u).slice(0,60)),'success');}
+  else toast('❌ '+(r.error||'Login failed'),'error');
+}
+
+async function rbdTestBank(){
+  toast('Fetching bank details...','info');
+  const r=await api('rbd_test_bank');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='🏦 Bank/UPI Details';
+  if(r.ok&&r.bank){
+    const b=r.bank;toast('✅ Bank details found!','success');
+    body.innerHTML=`<div style="font-size:13px;line-height:2.2;background:var(--s2);padding:14px;border-radius:8px">
+      <span style="color:var(--g)">✅ Bank Details (powerdreams.co):</span><br>
+      📱 UPI ID: <code>${b.upiId||'—'}</code><br>
+      👤 Holder: <b>${b.accHolderName||'—'}</b><br>
+      🔢 Acc No: <code>${b.accNo||'—'}</code><br>
+      🏛 IFSC: <code>${b.ifscCode||'—'}</code><br>
+      🏦 Bank: ${b.bankName||'—'}</div>`;
+  }else{toast('❌ Bank details not found','error');body.innerHTML=`<div style="color:var(--r);font-size:12px">❌ fetchAvailablePeer failed<pre style="font-size:10px;margin-top:8px;color:var(--td)">${JSON.stringify(r,null,2)}</pre></div>`;}
+}
+
+async function rbdSendTest(){
+  const cid=g('rbd-admin-chat').value.trim();
+  toast('Sending test message...','info');
+  const r=await api('rbd_send_test',{chat_id:cid});
+  r.ok?toast('✅ Message sent!','success'):toast('❌ '+(r.error||'failed'),'error');
+}
+
+async function rbdLoadLedger(){
+  const r=await api('rbd_get_ledger');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='👥 User Ledger';
+  if(!r.ok||!Object.keys(r.ledger||{}).length){body.innerHTML='<div style="color:var(--td)">No users yet.</div>';return;}
+  let rows='';
+  Object.entries(r.ledger||{}).forEach(([cid,u])=>{
+    rows+=`<tr>
+      <td style="font-family:monospace;font-size:11px">${cid}</td>
+      <td style="color:var(--g)">₹${parseFloat(u.balance||0).toFixed(2)}</td>
+      <td>${(u.deposits||[]).length}</td>
+      <td>${(u.withdrawals||[]).length}</td>
+      <td><button class="btn bsu bsm" onclick="rbdApprovePrompt('${cid}')">✅ Credit</button></td>
+    </tr>`;
+  });
+  body.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--td)">Total Users: <b style="color:var(--c)">${r.total_users}</b></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Balance</th><th>Deposits</th><th>Withdrawals</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+async function rbdApprovePrompt(chatId){
+  const amt=prompt('Approve deposit amount (₹):');if(!amt||isNaN(parseFloat(amt)))return;
+  const utr=prompt('UTR number (optional):');
+  const r=await api('rbd_approve_deposit',{chat_id:chatId,amount:parseFloat(amt),utr:utr||''});
+  if(r.ok){toast('✅ Deposit approved! Balance updated.','success');rbdLoadLedger();}
+  else toast('❌ '+(r.error||''),'error');
+}
+
+async function rbdLoadBlocked(){
+  const r=await api('rbd_get_blocked');
+  const card=g('rbd-info-card');const body=g('rbd-info-body');const title=g('rbd-info-title');
+  card.style.display='block';title.textContent='🚫 Blocked Users';
+  if(!r.ok||!Object.keys(r.blocked||{}).length){body.innerHTML='<div style="color:var(--g)">✅ No blocked users.</div>';return;}
+  let rows='';
+  Object.entries(r.blocked||{}).forEach(([cid,info])=>{
+    rows+=`<tr><td style="font-family:monospace;font-size:11px">${cid}</td><td style="color:var(--r)">${info.remaining_mins} min</td><td><button class="btn bsu bsm" onclick="rbdUnblock('${cid}')">✅ Unblock</button></td></tr>`;
+  });
+  body.innerHTML=`<div style="margin-bottom:8px;color:var(--r)">🚫 Blocked: <b>${r.total}</b></div><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="color:var(--td)"><th style="padding:6px;text-align:left">Chat ID</th><th>Time Left</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function rbdUnblock(cid){const r=await api('rbd_unblock_user',{chat_id:cid});r.ok?toast('✅ Unblocked: '+cid,'success'):toast('Error','error');rbdLoadBlocked();}
+
+async function rbdLoadLogs(){
+  const r=await api('rbd_get_logs');const box=g('rbd-log-box');
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function rbdClearLogs(){await api('rbd_clear_logs');rbdLoadLogs();toast('Logs cleared','info');}
+
+// ═══════════════════════════════════════════════════════════
+// 🔗 LINK RUNNER JAVASCRIPT
+// ═══════════════════════════════════════════════════════════
+let _lrLinks=[];let _lrLinkIdx=0;
+
+function lrInit(){ lrLoadConfig2(); lrLoadLogs(); }
+
+async function lrLoadConfig2(){
+  const r=await api('lr_get_config');if(!r.ok)return;const d=r.data||{};
+  g('lr-token').value=d.bot_token||'';g('lr-chat').value=d.chat_id||'';
+  g('lr-prefix').value=d.send_prefix||'';g('lr-secret').value=d.run_secret||'';
+  g('lr-wtoken').value=d.webhook_token||'';g('lr-wcmd').value=d.webhook_cmd||'/run';
+  _lrLinks=d.links||[];lrRenderLinks();
+}
+
+async function lrSaveConfig(){
+  const payload={bot_token:g('lr-token').value.trim(),chat_id:g('lr-chat').value.trim(),send_prefix:g('lr-prefix').value,run_secret:g('lr-secret').value.trim(),webhook_token:g('lr-wtoken').value.trim(),webhook_cmd:g('lr-wcmd').value.trim(),new_pass:g('lr-newpass').value.trim()};
+  const r=await api('lr_save_config',payload);r.ok?toast('✅ Link Runner config saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function lrSaveLinks(){
+  const r=await api('lr_save_links',{links:_lrLinks});r.ok?toast('✅ '+r.count+' link(s) saved!','success'):toast('Error: '+(r.error||''),'error');
+}
+
+async function lrSavePage(){ await lrSaveConfig(); await lrSaveLinks(); }
+
+async function lrSetWebhook(){toast('Setting webhook...','info');const r=await api('lr_set_webhook');r.ok?toast('✅ Webhook set: '+r.webhook_url,'success'):toast('❌ '+(r.error||r.tg?.description||'failed'),'error');}
+async function lrRemoveWebhook(){const r=await api('lr_remove_webhook');r.ok?toast('Webhook removed','info'):toast('Error','error');}
+
+async function lrRunAll(){
+  const st=g('lr-run-status');st.textContent='⏳ Running...';st.style.color='var(--y)';
+  const r=await api('lr_run_now');st.textContent='';
+  if(!r.ok){toast('Error: '+(r.error||''),'error');return;}
+  lrShowResults(r.results||[]);toast('✅ Done! '+r.success+'/'+(r.results||[]).length+' success','success');lrLoadLogs();
+}
+
+function lrAddLink(preset={}){
+  const id=preset.id||('l_'+Date.now()+'_'+(++_lrLinkIdx));
+  _lrLinks.push({id,name:preset.name||'New Link',enabled:preset.enabled!==false,url:preset.url||'',method:preset.method||'GET',headers:preset.headers||'',body:preset.body||'',timeout:preset.timeout||30,ssl_verify:preset.ssl_verify!==false,response_path:preset.response_path||'',reply_template:preset.reply_template||'📌 <b>{name}</b>\n\n{response}',error_message:preset.error_message||'⚠️ <b>{name}</b> failed!\nHTTP: <code>{http_code}</code>',send_on_error:preset.send_on_error||false,chat_id:preset.chat_id||'',screenshot_mode:preset.screenshot_mode||false,screenshot_caption:preset.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}'});
+  lrRenderLinks();const c=g('lr-links-container');if(c)c.lastElementChild?.scrollIntoView({behavior:'smooth'});
+}
+
+function lrRenderLinks(){
+  const c=g('lr-links-container');if(!c)return;c.innerHTML='';g('lr-link-count').textContent=_lrLinks.length;
+  _lrLinks.forEach((lk,i)=>c.appendChild(lrBuildLinkEl(lk,i)));
+}
+
+function lrEsc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function lrSyncField(id,field,val){const lk=_lrLinks.find(l=>l.id===id);if(lk)lk[field]=val;}
+function lrToggleCard(id){const el=g('lrcard_'+id);if(el)el.classList.toggle('lrcollapsed');}
+function lrToggleSsCap(id,show){const w=g('lrss_wrap_'+id);if(w)w.style.display=show?'':'none';}
+function lrDeleteLink(id){if(!confirm('Delete this link?'))return;_lrLinks=_lrLinks.filter(l=>l.id!==id);lrRenderLinks();}
+
+function lrBuildLinkEl(lk,i){
+  const div=document.createElement('div');
+  div.id='lrcard_'+lk.id;
+  div.style.cssText='background:var(--s2);border:1px solid var(--b);border-radius:8px;padding:14px;margin-bottom:10px;position:relative';
+  div.innerHTML=`
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+  <div style="display:flex;align-items:center;gap:8px">
+    <span style="cursor:pointer;user-select:none;color:var(--td)" onclick="lrToggleCard('${lk.id}')">▼</span>
+    <input type="text" value="${lrEsc(lk.name)}" id="lrn_${lk.id}" style="background:transparent;border:none;border-bottom:1px solid var(--b);border-radius:0;padding:2px 4px;width:160px;color:var(--t);font-weight:600;outline:none" onchange="lrSyncField('${lk.id}','name',this.value)">
+    <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;${lk.enabled?'background:rgba(57,255,20,.15);color:var(--g);border:1px solid rgba(57,255,20,.3)':'background:rgba(255,45,85,.15);color:var(--r);border:1px solid rgba(255,45,85,.3)'}" id="lren_badge_${lk.id}">${lk.enabled?'ON':'OFF'}</span>
+  </div>
+  <div style="display:flex;gap:5px;flex-wrap:wrap">
+    <button class="btn bg bsm" onclick="lrRunSingle('${lk.id}')">▶ Test</button>
+    <button class="btn bd bsm" onclick="lrDeleteLink('${lk.id}')">🗑</button>
+  </div>
+</div>
+<div style="font-size:11px;color:var(--td);font-family:monospace;word-break:break-all;margin-bottom:8px" id="lrurl_preview_${lk.id}">${lrEsc(lk.url)||'<span style="color:var(--tf)">No URL</span>'}</div>
+<div id="lrbody_${lk.id}" style="display:none">
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">🌐 URL</label><input type="text" id="lru_${lk.id}" class="fi" value="${lrEsc(lk.url)}" placeholder="https://..." onchange="lrSyncField('${lk.id}','url',this.value);g('lrurl_preview_${lk.id}').textContent=this.value||'No URL'"></div>
+    <div class="fgrp" style="max-width:110px"><label class="fl">Method</label><select id="lrm_${lk.id}" class="fsel fi" onchange="lrSyncField('${lk.id}','method',this.value)">${['GET','POST','PUT','PATCH','DELETE'].map(m=>`<option${lk.method===m?' selected':''}>${m}</option>`).join('')}</select></div>
+    <div class="fgrp" style="max-width:100px"><label class="fl">Timeout(s)</label><input type="number" id="lrt_${lk.id}" class="fi" value="${lk.timeout||30}" min="5" max="120" onchange="lrSyncField('${lk.id}','timeout',+this.value)"></div>
+  </div>
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">📋 Headers (Key: Value per line)</label><textarea id="lrh_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','headers',this.value)">${lrEsc(lk.headers)}</textarea></div>
+    <div class="fgrp"><label class="fl">📦 Request Body (POST/PUT)</label><textarea id="lrb_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','body',this.value)">${lrEsc(lk.body)}</textarea></div>
+  </div>
+  <div class="fg mb">
+    <div class="fgrp"><label class="fl">🔍 Response JSON Path (e.g. data.result)</label><input id="lrrp_${lk.id}" class="fi" value="${lrEsc(lk.response_path)}" placeholder="Leave blank for auto-detect" onchange="lrSyncField('${lk.id}','response_path',this.value)"></div>
+    <div class="fgrp"><label class="fl">💬 Override Chat ID (blank = use global)</label><input id="lrci_${lk.id}" class="fi" value="${lrEsc(lk.chat_id)}" placeholder="Optional" onchange="lrSyncField('${lk.id}','chat_id',this.value)"></div>
+  </div>
+  <div class="fgrp mb"><label class="fl">📝 Reply Template</label><textarea id="lrrt_${lk.id}" class="fi fta" rows="3" onchange="lrSyncField('${lk.id}','reply_template',this.value)">${lrEsc(lk.reply_template)}</textarea><div style="font-size:10px;color:var(--td);margin-top:4px">Vars: {name} {url} {response} {result} {http_code} {status} {ts} {date} {time} + any JSON key</div></div>
+  <div class="fgrp mb"><label class="fl">❌ Error Message Template</label><textarea id="lrem_${lk.id}" class="fi fta" rows="2" onchange="lrSyncField('${lk.id}','error_message',this.value)">${lrEsc(lk.error_message)}</textarea></div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrenabled_${lk.id}" ${lk.enabled?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','enabled',this.checked);const b=g('lren_badge_${lk.id}');if(b){b.textContent=this.checked?'ON':'OFF';b.style.color=this.checked?'var(--g)':'var(--r)'}"><span style="font-size:12px">Enabled</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrssl_${lk.id}" ${lk.ssl_verify!==false?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','ssl_verify',this.checked)"><span style="font-size:12px">SSL Verify</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrsoe_${lk.id}" ${lk.send_on_error?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','send_on_error',this.checked)"><span style="font-size:12px">Send on Error</span></label>
+    <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="lrssm_${lk.id}" ${lk.screenshot_mode?'checked':''} style="accent-color:var(--c)" onchange="lrSyncField('${lk.id}','screenshot_mode',this.checked);lrToggleSsCap('${lk.id}',this.checked)"><span style="font-size:12px">📸 Screenshot Mode</span></label>
+  </div>
+  <div id="lrss_wrap_${lk.id}" style="${lk.screenshot_mode?'':'display:none'}">
+    <div class="fgrp mb"><label class="fl">📸 Screenshot Caption (HTML)</label><textarea id="lrssc_${lk.id}" class="fi fta" rows="2" onchange="lrSyncField('${lk.id}','screenshot_caption',this.value)">${lrEsc(lk.screenshot_caption||'📸 <b>{name}</b>\n🌐 <code>{url}</code>\n🕐 {ts}')}</textarea><div style="font-size:10px;color:var(--td);margin-top:4px">Vars: {name} {url} {ts} {date} {time}</div></div>
+    <div style="background:rgba(57,255,20,.06);border:1px solid rgba(57,255,20,.2);border-radius:6px;padding:8px 12px;margin-top:4px;font-size:11px;color:var(--g)">✅ <b>No browser install needed!</b> Free APIs use hoti hain (thum.io → microlink).</div>
+  </div>
+  <div id="lrresult_${lk.id}" style="margin-top:10px;display:none;background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;font-size:12px"></div>
+</div>`;
+  div.querySelector('[onclick*="lrToggleCard"]')?.addEventListener('click',()=>{
+    const body=g('lrbody_'+lk.id);if(body)body.style.display=body.style.display==='none'?'block':'none';
+  });
+  return div;
+}
+
+async function lrRunSingle(linkId){
+  const box=g('lrresult_'+linkId);if(box){box.style.display='block';box.innerHTML='<span style="color:var(--y)">⏳ Testing...</span>';}
+  const r=await api('lr_run_single',{link_id:linkId});
+  if(!r.ok){if(box)box.innerHTML='<span style="color:var(--r)">Error: '+(r.error||'')+'</span>';return;}
+  const res=r.result||{};const isSS=res.mode==='screenshot';
+  if(box){box.innerHTML=`<b style="color:${res.failed?'var(--r)':'var(--g)'}">${res.failed?'❌ FAILED':'✅ SUCCESS'}</b>`+(isSS?' <span style="background:rgba(0,245,255,.1);color:var(--c);padding:1px 6px;border-radius:3px;font-size:10px">📸 Screenshot</span>':` HTTP <code>${res.code}</code>`)+(res.sent?' <span style="color:var(--g)">| Sent ✓</span>':'')+(!isSS?`<div style="color:var(--td);font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:150px;overflow:auto;margin-top:6px">${lrEsc(String(res.extracted||'').slice(0,500))}</div>`:'');}
+  lrLoadLogs();
+}
+
+function lrShowResults(results){
+  const card=g('lr-results-card');const body=g('lr-results-body');if(!card||!body)return;
+  card.style.display='block';
+  body.innerHTML=results.map(r=>`<div style="background:var(--s2);border:1px solid var(--b);border-radius:6px;padding:10px;margin-bottom:8px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px"><b>${lrEsc(r.name)}</b><div style="display:flex;gap:5px;align-items:center">${r.mode==='screenshot'?'<span style="background:rgba(0,245,255,.1);color:var(--c);padding:1px 6px;border-radius:3px;font-size:10px">📸</span>':''}<span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;${r.failed?'background:rgba(255,45,85,.15);color:var(--r)':'background:rgba(57,255,20,.15);color:var(--g)'}">${r.failed?'❌ FAILED':'✅ OK'}${r.mode!=='screenshot'?' HTTP '+r.code:''}</span>${r.sent?'<span style="color:var(--g);font-size:11px">✓ Sent</span>':''}</div></div>${(!r.failed&&r.mode!=='screenshot')?`<div style="font-family:monospace;font-size:11px;margin-top:6px;white-space:pre-wrap;max-height:80px;overflow:auto;color:var(--td)">${lrEsc(String(r.extracted||'').slice(0,300))}</div>`:''}</div>`).join('');
+}
+
+async function lrLoadLogs(){
+  const r=await api('lr_get_logs');const box=g('lr-log-box');if(!box)return;
+  if(!r.ok||!r.data?.length){box.innerHTML='<div style="color:var(--tf)">No logs yet.</div>';return;}
+  box.innerHTML=r.data.map(l=>`<div><span style="color:var(--tf)">[${new Date(l.time).toLocaleTimeString()}]</span> <span style="color:var(--${l.type==='success'?'g':l.type==='error'?'r':l.type==='warn'?'y':'c'})">${l.text}</span></div>`).join('');
+}
+async function lrClearLogs(){await api('lr_clear_logs');lrLoadLogs();toast('Logs cleared','info');}
 </script></body></html>
