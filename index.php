@@ -4898,7 +4898,7 @@ body{background:var(--bg)!important;color:var(--t)!important;font-family:'Rajdha
 .wrap{display:flex;min-height:100dvh;width:100%;overflow-x:hidden;}
 .sb{width:240px;background:rgba(13,17,23,.99);border-right:1px solid var(--b);display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;z-index:10000;transition:transform .3s;overflow-y:auto;}
 .logo{display:flex;align-items:center;gap:12px;padding:18px 16px;border-bottom:1px solid var(--b);}
-.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);}
+.main{margin-left:240px;flex:1;display:flex;flex-direction:column;width:calc(100% - 240px);height:100vh;overflow-y:auto;}
 .topbar{background:rgba(13,17,23,.95);border-bottom:1px solid var(--b);padding:0 18px;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;}
 .con{padding:18px;flex:1;overflow-x:hidden;}
 .panel{display:none;}.panel.active{display:block;}
@@ -5044,6 +5044,7 @@ td{padding:9px 11px;vertical-align:middle;}
     <button class="ni" onclick="nav('linkautomation',this)" style="color:#00f5ff;border-left:2px solid #00f5ff">🔗 Link Automation</button>
     <button class="ni" onclick="nav('depositbot',this)" style="color:#ff6b1a;border-left:2px solid #ff6b1a">💰 Deposit Bot</button>
     <button class="ni" onclick="nav('linkrunner',this)" style="color:#7c7cff;border-left:2px solid #7c7cff">🔗 Link Runner</button>
+    <button class="ni" onclick="nav('adharbot',this)" style="color:#63b3ed;border-left:2px solid #63b3ed">👾 Aadhaar Bot</button>
     <a href="?page=logout" class="ni" style="color:var(--r)">🚪 Logout</a>
   </nav>
 </aside>
@@ -7114,48 +7115,6 @@ td{padding:9px 11px;vertical-align:middle;}
       <button class="btn bsu" onclick="lrSaveConfig()" style="width:100%;margin-top:8px">💾 Save Config</button>
     </div>
 
-    <!-- Python Aadhaar Bot Config Card -->
-    <div class="card" style="border-color:rgba(99,179,237,.4)">
-      <div class="sh">
-        <div>
-          <div class="st" style="color:#63b3ed;font-size:14px">👾 PYTHON AADHAAR BOT CONFIG</div>
-          <div style="font-size:11px;color:var(--td);margin-top:3px">Python bot ke liye config — save hone pe <code>bot_config.json</code> banta hai</div>
-        </div>
-        <button class="btn bsm" style="background:rgba(99,179,237,.15);color:#63b3ed;border:1px solid rgba(99,179,237,.4)" onclick="lrTogglePyCard()">▼ Show / Hide</button>
-      </div>
-      <div id="lr-pybot-body" style="display:none">
-        <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:8px;padding:10px;font-size:11px;color:var(--td);margin-bottom:12px;line-height:1.8">
-          💡 <b style="color:#63b3ed">Kaise kaam karta hai:</b><br>
-          Python bot yahan se config load karta hai — aapko bot restart nahi karna. Bas yahan save karo, Python bot automatically naya config use karega.<br>
-          <code style="color:#63b3ed">bot_config.json</code> file same folder mein ban jaati hai.
-        </div>
-        <div class="fg mb">
-          <div class="fgrp"><label class="fl">🤖 Bot Token (Python bot ka alag token)</label><input type="password" id="lr-py-token" class="fi" placeholder="123456:ABC..."></div>
-          <div class="fgrp"><label class="fl">🌐 UIDAI Proxy (optional, socks5://host:port)</label><input type="text" id="lr-py-proxy" class="fi" placeholder="socks5://127.0.0.1:1080"></div>
-        </div>
-        <div class="fg mb">
-          <div class="fgrp"><label class="fl">📟 Fetch Command</label><input type="text" id="lr-py-fetch-cmd" class="fi" placeholder="/fetch"></div>
-          <div class="fgrp"><label class="fl">❌ Cancel Command</label><input type="text" id="lr-py-cancel-cmd" class="fi" placeholder="/cancel"></div>
-          <div class="fgrp"><label class="fl">🔄 Refresh Command</label><input type="text" id="lr-py-refresh-cmd" class="fi" placeholder="/refresh"></div>
-        </div>
-        <div class="fgrp mb"><label class="fl">👋 Start Message</label><textarea id="lr-py-start-msg" class="fi fta" rows="4"></textarea></div>
-        <div class="fg mb">
-          <div class="fgrp"><label class="fl">⏳ Loading Steps (ek line = ek step)</label><textarea id="lr-py-loading-steps" class="fi fta" rows="8"></textarea></div>
-          <div class="fgrp"><label class="fl">🔐 OTP Loading Steps (ek line = ek step)</label><textarea id="lr-py-otp-steps" class="fi fta" rows="8"></textarea></div>
-        </div>
-        <div class="fg mb">
-          <div class="fgrp"><label class="fl">📸 Captcha Message</label><textarea id="lr-py-captcha-msg" class="fi fta" rows="3"></textarea></div>
-          <div class="fgrp"><label class="fl">📲 OTP Message ({mobile} placeholder)</label><textarea id="lr-py-otp-msg" class="fi fta" rows="3"></textarea></div>
-        </div>
-        <div class="fg mb">
-          <div class="fgrp"><label class="fl">✅ Success Message</label><textarea id="lr-py-success-msg" class="fi fta" rows="2"></textarea></div>
-          <div class="fgrp"><label class="fl">❌ Cancel Message</label><textarea id="lr-py-cancel-msg" class="fi fta" rows="2"></textarea></div>
-        </div>
-        <div class="fgrp mb"><label class="fl">⚠️ Error Prefix</label><input type="text" id="lr-py-error-prefix" class="fi" placeholder="❌ &lt;b&gt;Error:&lt;/b&gt;"></div>
-        <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid rgba(99,179,237,.4);width:100%" onclick="lrSavePyConfig()">💾 Save Python Bot Config</button>
-      </div>
-    </div>
-
     <!-- Python Debugger Card -->
     <div class="card" style="border-color:rgba(191,90,242,.4)">
       <div class="sh">
@@ -7210,6 +7169,106 @@ td{padding:9px 11px;vertical-align:middle;}
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- 👾 AADHAAR BOT PANEL                                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="panel" id="p-adharbot">
+    <div class="card" style="border-color:rgba(99,179,237,.5);background:linear-gradient(135deg,rgba(99,179,237,.05),rgba(13,17,23,1))">
+      <div class="sh">
+        <div>
+          <div class="st" style="color:#63b3ed;font-size:14px">👾 PYTHON AADHAAR BOT</div>
+          <div style="font-size:12px;color:var(--td);margin-top:3px">Bot messages, commands aur flow customize karo — save hone pe <code style="color:#63b3ed">bot_config.json</code> auto-generate hota hai</div>
+        </div>
+      </div>
+      <div style="background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:8px;padding:10px;font-size:12px;color:var(--td);line-height:1.9">
+        💡 <b style="color:#63b3ed">Flow:</b> User <code>/fetch &lt;mobile&gt; &lt;name&gt;</code> → Loading animation → Captcha → OTP → Aadhaar PDF send<br>
+        🔄 <b>Yahan save karo</b> → <code>bot_config.json</code> update → Python bot automatically naya config use karega (restart nahi chahiye)
+      </div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:var(--g)">⚡ QUICK ACTIONS</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed" onclick="adharSaveConfig()">💾 Save Config</button>
+        <button class="btn bg bsm" onclick="adharLoadConfig()">🔄 Refresh</button>
+        <button class="btn bd bsm" onclick="adharResetDefaults()">↩️ Reset to Defaults</button>
+      </div>
+    </div>
+
+    <!-- Bot Credentials -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">🔐 BOT CREDENTIALS</div></div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">🤖 Bot Token (Python bot ka alag token)</label><input type="password" id="ab-token" class="fi" placeholder="123456789:ABCdef..."></div>
+        <div class="fgrp"><label class="fl">🌐 UIDAI Proxy (optional — socks5://host:port)</label><input type="text" id="ab-proxy" class="fi" placeholder="socks5://127.0.0.1:1080 ya khali chhodo"></div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp"><label class="fl">📟 Fetch Command</label><input type="text" id="ab-fetch-cmd" class="fi" placeholder="/fetch"></div>
+        <div class="fgrp"><label class="fl">❌ Cancel Command</label><input type="text" id="ab-cancel-cmd" class="fi" placeholder="/cancel"></div>
+        <div class="fgrp"><label class="fl">🔄 Refresh Command</label><input type="text" id="ab-refresh-cmd" class="fi" placeholder="/refresh"></div>
+      </div>
+    </div>
+
+    <!-- Bot Messages -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">💬 BOT MESSAGES</div></div>
+      <div class="fgrp mb">
+        <label class="fl">👋 Start / Welcome Message</label>
+        <textarea id="ab-start-msg" class="fi fta" rows="5" placeholder="/start ya /fetch pe dono ko yahi message jaata hai"></textarea>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">📸 Captcha Message</label>
+          <textarea id="ab-captcha-msg" class="fi fta" rows="4"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">📲 OTP Message <span style="color:var(--td);font-size:10px">({mobile} use kar sakte ho)</span></label>
+          <textarea id="ab-otp-msg" class="fi fta" rows="4"></textarea>
+        </div>
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">✅ Success Message (PDF send hone ke baad)</label>
+          <textarea id="ab-success-msg" class="fi fta" rows="3"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">❌ Cancel Message</label>
+          <textarea id="ab-cancel-msg" class="fi fta" rows="3"></textarea>
+        </div>
+      </div>
+      <div class="fgrp mb">
+        <label class="fl">⚠️ Error Prefix</label>
+        <input type="text" id="ab-error-prefix" class="fi" placeholder="❌ &lt;b&gt;Error:&lt;/b&gt;">
+      </div>
+    </div>
+
+    <!-- Loading Steps -->
+    <div class="card">
+      <div class="sh"><div class="st" style="color:#63b3ed">⏳ LOADING ANIMATIONS</div></div>
+      <div style="font-size:11px;color:var(--td);margin-bottom:12px;background:rgba(99,179,237,.06);border:1px solid rgba(99,179,237,.2);border-radius:6px;padding:8px 12px;line-height:1.8">
+        Har line ek step hai — bot ek ek karke yeh messages bhejta hai, jaise real processing chal rahi ho.<br>
+        <b style="color:#63b3ed">Tip:</b> Interesting emojis + technical jargon = realistic loading effect 😈
+      </div>
+      <div class="fg mb">
+        <div class="fgrp">
+          <label class="fl">⏳ Fetch / Initial Loading Steps <span style="color:var(--td);font-size:10px">(ek line = ek step)</span></label>
+          <textarea id="ab-loading-steps" class="fi fta" rows="10" style="font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+        </div>
+        <div class="fgrp">
+          <label class="fl">🔐 OTP Verify Loading Steps <span style="color:var(--td);font-size:10px">(ek line = ek step)</span></label>
+          <textarea id="ab-otp-steps" class="fi fta" rows="10" style="font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save button -->
+    <div class="card">
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;padding:12px;font-size:14px" onclick="adharSaveConfig()">💾 Save Python Aadhaar Bot Config</button>
+      <div id="ab-save-result" style="margin-top:10px;font-size:12px;display:none"></div>
+    </div>
+  </div>
+
 <?php endif ?>
 
 <script>
@@ -7223,9 +7282,13 @@ function nav(id,btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.ni').forEach(n=>n.classList.remove('active'));
   g('p-'+id).classList.add('active');btn.classList.add('active');closeSb();
+  // Scroll to top — target all possible scroll containers
   window.scrollTo({top:0,behavior:'instant'});
-  document.documentElement.scrollTop=0;document.body.scrollTop=0;
-  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad,depositbot:rbdInit,linkrunner:lrInit};
+  document.documentElement.scrollTop=0;
+  document.body.scrollTop=0;
+  const conEl=document.querySelector('.con');if(conEl){conEl.scrollTop=0;}
+  const mainEl=document.querySelector('.main');if(mainEl){mainEl.scrollTop=0;}
+  const m={dash:()=>{loadDash();checkBot();loadLogs();},bots:loadBots,users:loadUsers,ukeys:loadUK,lkeys:loadLK,builder:loadPages,cfg:loadCfg,vault:loadVault,bvars:loadBV,dvars:loadDynVars,fj:loadFj,broadcast:()=>{dmLoadStickers();dmLoadEmojis();dmsLoadStickers();dmsLoadEmojis();},guide:()=>{},stickers:refreshStickers,forwards:refreshForwards,welcome:loadWelcome,tagger:()=>{loadTagger();utLoadEmojiPicker();},hiddeneye:loadHiddenEye,apkrenamer:apkrLoad,promobot:promoLoad,rosebot:roseLoad,linkautomation:laLoad,depositbot:rbdInit,linkrunner:lrInit,adharbot:adharBotInit};
   if(m[id])m[id]();
 }
 function openModal(id){g(id).classList.add('open');document.body.style.overflow='hidden';}
@@ -10216,7 +10279,7 @@ async function rbdClearLogs(){await api('rbd_clear_logs');rbdLoadLogs();toast('L
 // ═══════════════════════════════════════════════════════════
 let _lrLinks=[];let _lrLinkIdx=0;
 
-function lrInit(){ lrLoadConfig2(); lrLoadLogs(); lrLoadPyConfig(); }
+function lrInit(){ lrLoadConfig2(); lrLoadLogs(); }
 
 async function lrLoadConfig2(){
   const r=await api('lr_get_config');if(!r.ok)return;const d=r.data||{};
@@ -10355,36 +10418,59 @@ async function lrClearLogs(){await api('lr_clear_logs');lrLoadLogs();toast('Logs
 // ─── Form Fill Mode toggle ────────────────────────────────
 function lrToggleFormFill(id,show){const w=g('lrff_wrap_'+id);if(w)w.style.display=show?'block':'none';}
 
-// ─── Python Aadhaar Bot Config ────────────────────────────
-function lrTogglePyCard(){
-  const b=g('lr-pybot-body');if(!b)return;
-  b.style.display=b.style.display==='none'?'block':'none';
+// lr_ prefix wale py functions (Link Runner se call hote the — kept for compat)
+async function lrLoadPyConfig(){ await adharLoadConfig(); }
+async function lrSavePyConfig(){ await adharSaveConfig(); }
+
+// ═══════════════════════════════════════════════════════════
+// 👾 AADHAAR BOT JAVASCRIPT (Separate Section)
+// ═══════════════════════════════════════════════════════════
+const _abElMap={
+  'ab-token':'py_bot_token','ab-proxy':'py_uidai_proxy',
+  'ab-fetch-cmd':'py_fetch_cmd','ab-cancel-cmd':'py_cancel_cmd','ab-refresh-cmd':'py_refresh_cmd',
+  'ab-start-msg':'py_start_msg','ab-loading-steps':'py_loading_steps','ab-otp-steps':'py_otp_steps',
+  'ab-captcha-msg':'py_captcha_msg','ab-otp-msg':'py_otp_msg',
+  'ab-success-msg':'py_success_msg','ab-cancel-msg':'py_cancel_msg','ab-error-prefix':'py_error_prefix',
+};
+
+function adharBotInit(){ adharLoadConfig(); }
+
+async function adharLoadConfig(){
+  const r=await api('lr_get_py_config');if(!r.ok){toast('Config load failed','error');return;}
+  const d=r.data||{};
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=d[key]||'';});
 }
 
-async function lrLoadPyConfig(){
-  const r=await api('lr_get_py_config');if(!r.ok)return;const d=r.data||{};
-  const map={
-    'lr-py-token':'py_bot_token','lr-py-proxy':'py_uidai_proxy',
-    'lr-py-fetch-cmd':'py_fetch_cmd','lr-py-cancel-cmd':'py_cancel_cmd','lr-py-refresh-cmd':'py_refresh_cmd',
-    'lr-py-start-msg':'py_start_msg','lr-py-loading-steps':'py_loading_steps','lr-py-otp-steps':'py_otp_steps',
-    'lr-py-captcha-msg':'py_captcha_msg','lr-py-otp-msg':'py_otp_msg',
-    'lr-py-success-msg':'py_success_msg','lr-py-cancel-msg':'py_cancel_msg','lr-py-error-prefix':'py_error_prefix',
-  };
-  Object.entries(map).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=d[key]||'';});
-}
-
-async function lrSavePyConfig(){
-  const map={
-    'lr-py-token':'py_bot_token','lr-py-proxy':'py_uidai_proxy',
-    'lr-py-fetch-cmd':'py_fetch_cmd','lr-py-cancel-cmd':'py_cancel_cmd','lr-py-refresh-cmd':'py_refresh_cmd',
-    'lr-py-start-msg':'py_start_msg','lr-py-loading-steps':'py_loading_steps','lr-py-otp-steps':'py_otp_steps',
-    'lr-py-captcha-msg':'py_captcha_msg','lr-py-otp-msg':'py_otp_msg',
-    'lr-py-success-msg':'py_success_msg','lr-py-cancel-msg':'py_cancel_msg','lr-py-error-prefix':'py_error_prefix',
-  };
+async function adharSaveConfig(){
   const payload={};
-  Object.entries(map).forEach(([elId,key])=>{const el=g(elId);if(el)payload[key]=el.value;});
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)payload[key]=el.value;});
   const r=await api('lr_save_py_config',payload);
-  r.ok?toast('✅ Python bot config saved! bot_config.json updated.','success'):toast('Error: '+(r.error||''),'error');
+  const res=g('ab-save-result');
+  if(r.ok){
+    toast('✅ Aadhaar Bot config saved! bot_config.json updated.','success');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved! <code>bot_config.json</code> update ho gaya. Python bot restart nahi chahiye.</span>';}
+  }else{
+    toast('Error: '+(r.error||''),'error');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Save failed')+'</span>';}
+  }
+}
+
+async function adharResetDefaults(){
+  if(!confirm('Sab default values restore karein?'))return;
+  const defaults={
+    py_bot_token:'',py_uidai_proxy:'',
+    py_fetch_cmd:'/fetch',py_cancel_cmd:'/cancel',py_refresh_cmd:'/refresh',
+    py_start_msg:"👾 <b>Aadhaar Retrieve Bot</b> — Online ✅\n\n📌 <b>Command:</b>\n<code>/fetch <mobile> <fullname></code>\n\nExample:\n<code>/fetch 9876543210 Ravi Kumar</code>",
+    py_loading_steps:"🔐 Secure tunnel initialize ho raha hai...\n🛰️ UIDAI node se connect ho raha hai...\n🧬 Session payload inject ho raha hai...\n🔍 Biometric endpoint resolve ho raha hai...\n⚡ Sandbox bypass ho raha hai...\n🗝️ Identity matrix decrypt ho rahi hai...\n📋 Form fill ho raha hai...\n📸 Captcha capture ho raha hai...",
+    py_otp_steps:"🔐 OTP token validate ho raha hai...\n🧬 Biometric hash cross-reference ho raha hai...\n📂 Encrypted Aadhaar file locate ho rahi hai...\n⬇️ Document decrypt aur package ho raha hai...\n✅ Document secured. Bhej raha hoon...",
+    py_captcha_msg:"📸 <b>Captcha ready hai!</b>\n\nNeeche captcha image dekho aur <b>text reply karo.</b>\n<i>/refresh = naya captcha | /cancel = band karo</i>",
+    py_otp_msg:"📲 <b>OTP bheja gaya!</b>\n📱 <code>{mobile}</code> pe OTP aaya hoga.\n\n🔢 <b>OTP reply karo:</b>\n<i>/cancel = band karo</i>",
+    py_success_msg:"✅ <b>Aadhaar document ready!</b>\n🔒 <i>Yeh file sirf aapke liye hai. Safely store karo.</i>",
+    py_cancel_msg:"❌ <b>Process cancel kar diya.</b>\nDobara shuru karne ke liye /fetch karo.",
+    py_error_prefix:"❌ <b>Error:</b>",
+  };
+  Object.entries(_abElMap).forEach(([elId,key])=>{const el=g(elId);if(el)el.value=defaults[key]||'';});
+  toast('Defaults restored! Save karo apply karne ke liye.','info');
 }
 
 // ─── Python Adhar Debugger ────────────────────────────────
