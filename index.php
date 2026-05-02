@@ -3981,6 +3981,82 @@ function handleLaFormCapture($botId,$chatId,$u,&$db,$s,$msgText,$token){
     return true;
 }
 
+// ─── Python Aadhaar Bot Webhook ──────────────────────────────────────────
+if(isset($_GET['py_webhook'])){
+    $abCfg=lrLoadConfig();
+    $abTok=trim($abCfg['py_bot_token']??'');
+    $abUpdate=json_decode(file_get_contents('php://input'),true);
+    if(!is_array($abUpdate)){http_response_code(200);exit;}
+    $abMsg=$abUpdate['message']??$abUpdate['channel_post']??null;
+    if($abMsg&&$abTok){
+        $abChatId=(string)($abMsg['chat']['id']??'');
+        $abText=trim($abMsg['text']??'');
+        $abCmd=strtolower(explode(' ',$abText)[0]??'');
+        $abFetchCmd=trim($abCfg['py_fetch_cmd']??'/fetch');
+        $abCancelCmd=trim($abCfg['py_cancel_cmd']??'/cancel');
+        $abRefreshCmd=trim($abCfg['py_refresh_cmd']??'/refresh');
+
+        // ── Active session check ─────────────────────────────
+        $abSession=lrSessionGet($abChatId);
+        if($abSession){
+            if($abCmd===$abCancelCmd||$abCmd==='/cancel'){
+                lrSessionDel($abChatId);
+                $cancelMsg=str_replace('\n',"\n",$abCfg['py_cancel_msg']??'❌ Process cancel kar diya.');
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$cancelMsg,'parse_mode'=>'HTML'],$abTok);
+                lrLog("PY-BOT: session cancelled — chat={$abChatId}",'info');
+                http_response_code(200);exit;
+            }
+            // Process session answer
+            $abStep=$abSession['step']??0;
+            $abFields=$abSession['fields']??[];
+            if(isset($abFields[$abStep])){
+                $abSession['answers'][$abFields[$abStep]]=$abText;
+                $abSession['step']=$abStep+1;
+                lrSessionSet($abChatId,$abSession);
+                if($abSession['step']<count($abFields)){
+                    $abNextLabel=$abSession['field_labels'][$abSession['step']]??$abFields[$abSession['step']];
+                    $abTotal=count($abFields);$abCurr=$abSession['step']+1;
+                    lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>"✏️ <b>".htmlspecialchars($abNextLabel,ENT_QUOTES)."</b> dalo: <i>({$abCurr}/{$abTotal})</i>\n<i>(ya {$abCancelCmd} likho)</i>",'parse_mode'=>'HTML'],$abTok);
+                    http_response_code(200);exit;
+                }
+                // All fields done — submit
+                lrSessionDel($abChatId);
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>str_replace('\n',"\n",$abCfg['py_success_msg']??'✅ Done!'),'parse_mode'=>'HTML'],$abTok);
+                lrLog("PY-BOT: form complete — chat={$abChatId}",'success');
+            }
+            http_response_code(200);exit;
+        }
+
+        // ── /start ───────────────────────────────────────────
+        if($abCmd==='/start'){
+            $abStartMsg=str_replace('\n',"\n",$abCfg['py_start_msg']??'👾 Aadhaar Bot online!');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStartMsg,'parse_mode'=>'HTML'],$abTok);
+            lrLog("PY-BOT: /start — chat={$abChatId}",'info');
+        }
+        // ── /fetch command ────────────────────────────────────
+        elseif($abCmd===$abFetchCmd||str_starts_with(strtolower($abText),strtolower($abFetchCmd).' ')){
+            $abLoadingRaw=trim($abCfg['py_loading_steps']??'');
+            $abSteps=array_filter(array_map('trim',explode("\n",$abLoadingRaw)),fn($s)=>$s!=='');
+            foreach($abSteps as $abStep2){
+                lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStep2,'parse_mode'=>'HTML'],$abTok);
+                usleep(800000); // 0.8s delay between steps
+            }
+            // After loading — show captcha message
+            $abCapMsg=str_replace('\n',"\n",$abCfg['py_captcha_msg']??'📸 Captcha enter karo:');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abCapMsg,'parse_mode'=>'HTML'],$abTok);
+            // Start a session for captcha → OTP flow
+            lrSessionSet($abChatId,['type'=>'adhar_flow','step'=>0,'fields'=>['captcha','otp'],'field_labels'=>['📸 Captcha','🔢 OTP'],'answers'=>[],'link_id'=>'adhar_fetch']);
+            lrLog("PY-BOT: /fetch started — chat={$abChatId}",'info');
+        }
+        // ── Unknown ───────────────────────────────────────────
+        else{
+            $abStartMsg=str_replace('\n',"\n",$abCfg['py_start_msg']??'👾 Aadhaar Bot online!');
+            lrTg('sendMessage',['chat_id'=>$abChatId,'text'=>$abStartMsg,'parse_mode'=>'HTML'],$abTok);
+        }
+    }
+    http_response_code(200);exit;
+}
+
 // ─── RBD (Deposit Bot) Webhook ───────────────────────────────────────────
 if(isset($_GET['rbd_webhook'])){
     $rbdCfg=rbdLoadConfig();
@@ -7280,6 +7356,8 @@ td{padding:9px 11px;vertical-align:middle;}
         <div class="fgrp"><label class="fl">❌ Cancel Command</label><input type="text" id="ab-cancel-cmd" class="fi" placeholder="/cancel"></div>
         <div class="fgrp"><label class="fl">🔄 Refresh Command</label><input type="text" id="ab-refresh-cmd" class="fi" placeholder="/refresh"></div>
       </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('credentials')">💾 Save Credentials</button>
+      <div id="ab-cred-result" style="display:none;margin-top:8px;font-size:12px"></div>
     </div>
 
     <!-- Bot Messages -->
@@ -7313,6 +7391,8 @@ td{padding:9px 11px;vertical-align:middle;}
         <label class="fl">⚠️ Error Prefix</label>
         <input type="text" id="ab-error-prefix" class="fi" placeholder="❌ &lt;b&gt;Error:&lt;/b&gt;">
       </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('messages')">💾 Save Messages</button>
+      <div id="ab-msg-result" style="display:none;margin-top:8px;font-size:12px"></div>
     </div>
 
     <!-- Loading Steps -->
@@ -7332,11 +7412,13 @@ td{padding:9px 11px;vertical-align:middle;}
           <textarea id="ab-otp-steps" class="fi fta" rows="10" style="font-family:'Share Tech Mono',monospace;font-size:12px"></textarea>
         </div>
       </div>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;margin-top:4px" onclick="adharSaveSection('loading')">💾 Save Loading Animations</button>
+      <div id="ab-load-result" style="display:none;margin-top:8px;font-size:12px"></div>
     </div>
 
-    <!-- Save button -->
+    <!-- Save All button -->
     <div class="card">
-      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;padding:12px;font-size:14px" onclick="adharSaveConfig()">💾 Save Python Aadhaar Bot Config</button>
+      <button class="btn bsm" style="background:rgba(99,179,237,.2);color:#63b3ed;border:1px solid #63b3ed;width:100%;padding:12px;font-size:14px" onclick="adharSaveConfig()">💾 Save ALL Config</button>
       <div id="ab-save-result" style="margin-top:10px;font-size:12px;display:none"></div>
     </div>
 
@@ -10558,11 +10640,35 @@ async function adharSaveConfig(){
   const r=await api('lr_save_py_config',payload);
   const res=g('ab-save-result');
   if(r.ok){
-    toast('✅ Aadhaar Bot config saved! bot_config.json updated.','success');
-    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved! <code>bot_config.json</code> update ho gaya. Python bot restart nahi chahiye.</span>';}
+    toast('✅ Aadhaar Bot config saved!','success');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved! <code>bot_config.json</code> updated.</span>';}
+    adharLoadLogs();
   }else{
     toast('Error: '+(r.error||''),'error');
     if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Save failed')+'</span>';}
+  }
+}
+
+async function adharSaveSection(section){
+  // Save only specific section fields
+  const sectionMap={
+    credentials:['ab-token','ab-proxy','ab-fetch-cmd','ab-cancel-cmd','ab-refresh-cmd'],
+    messages:['ab-start-msg','ab-captcha-msg','ab-otp-msg','ab-success-msg','ab-cancel-msg','ab-error-prefix'],
+    loading:['ab-loading-steps','ab-otp-steps'],
+  };
+  const resultIds={credentials:'ab-cred-result',messages:'ab-msg-result',loading:'ab-load-result'};
+  const fields=sectionMap[section]||[];
+  const payload={};
+  fields.forEach(elId=>{const key=_abElMap[elId];const el=g(elId);if(key&&el)payload[key]=el.value;});
+  const r=await api('lr_save_py_config',payload);
+  const res=g(resultIds[section]);
+  if(r.ok){
+    toast('✅ '+section.charAt(0).toUpperCase()+section.slice(1)+' saved!','success');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--g)">✅ Saved!</span>';}
+    adharLoadLogs();
+  }else{
+    toast('❌ Save failed','error');
+    if(res){res.style.display='block';res.innerHTML='<span style="color:var(--r)">❌ '+(r.error||'Failed')+'</span>';}
   }
 }
 
